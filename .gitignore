@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environments
+.venv/
+venv/
+.env
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Outputs
+results/
+结果/
+
+# Assets / raw media
+素材/
+
+# Local planning files
+progress.md
+findings.md
+task_plan.md

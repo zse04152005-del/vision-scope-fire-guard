@@ -1,0 +1,7 @@
+{
+  "cameras": [
+    {"id": "cam01", "name": "Lab-01", "source": "rtsp://example/1"},
+    {"id": "cam02", "name": "Hall-02", "source": "rtsp://example/2"}
+  ],
+  "alarm": {"hit_threshold": 3, "cooldown_seconds": 10}
+}
