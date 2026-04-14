@@ -14,5 +14,6 @@
       "source": 0
     }
   ],
-  "grid_cols": 3
+  "grid_cols": 3,
+  "theme": "dark"
 }

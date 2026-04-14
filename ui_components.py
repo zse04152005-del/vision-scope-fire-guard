@@ -1,7 +1,7 @@
 from typing import List, Tuple
 
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QHBoxLayout, QWidget, QSizePolicy, QScrollArea
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPoint
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QPoint, QTimer
 from PyQt6.QtGui import QFont, QImage, QPixmap, QDrag
 from PyQt6.QtCore import QMimeData
 
@@ -65,27 +65,42 @@ class CameraTile(QWidget):
         super().__init__()
         self.cam_id = name
         self.setMinimumSize(CAM_TILE_MIN_W, CAM_TILE_MIN_H)
+
+        self.status_dot = QLabel("●")
+        self.status_dot.setFixedWidth(14)
+        self._status_color = "#999"
+        self._pulse_on = True
+        self.status_dot.setStyleSheet(f"color: {self._status_color}; font-size: 14px;")
+
         self.name_label = QLabel(name)
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.name_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.name_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
 
         self.status_label = QLabel("OFFLINE")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.status_label.setStyleSheet("color: #999;")
+        self.status_label.setStyleSheet("color: #999; font-size: 11px;")
+
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.setInterval(600)
+        self._pulse_timer.timeout.connect(self._pulse_tick)
 
         header = QHBoxLayout()
+        header.setSpacing(6)
+        header.addWidget(self.status_dot)
         header.addWidget(self.name_label)
         header.addWidget(self.status_label)
 
         self.video_label = QLabel("等待视频输入...")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_label.setStyleSheet("background-color: #222; border: 1px solid #444;")
+        self.video_label.setStyleSheet(
+            "background-color: #0e1014; border: 1px solid #3a3f4b; border-radius: 6px; color: #6b7280;"
+        )
         self.video_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.video_label.setScaledContents(True)
 
         self.meta_label = QLabel("FPS: 0  |  目标: 0")
         self.meta_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self.meta_label.setStyleSheet("color: #666;")
+        self.meta_label.setStyleSheet("color: #6b7280; font-size: 11px;")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -102,7 +117,21 @@ class CameraTile(QWidget):
 
     def set_status(self, text: str, color: str = "#999") -> None:
         self.status_label.setText(text)
-        self.status_label.setStyleSheet(f"color: {color};")
+        self.status_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+        self._status_color = color
+        self.status_dot.setStyleSheet(f"color: {color}; font-size: 14px;")
+        if text == "ONLINE":
+            if not self._pulse_timer.isActive():
+                self._pulse_timer.start()
+        else:
+            if self._pulse_timer.isActive():
+                self._pulse_timer.stop()
+            self.status_dot.setStyleSheet(f"color: {color}; font-size: 14px;")
+
+    def _pulse_tick(self) -> None:
+        self._pulse_on = not self._pulse_on
+        self.status_dot.setText("●" if self._pulse_on else "○")
+        self.status_dot.setStyleSheet(f"color: {self._status_color}; font-size: 14px;")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

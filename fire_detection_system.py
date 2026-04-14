@@ -1,3 +1,4 @@
+import logging
 import sys
 import time
 import os
@@ -32,6 +33,14 @@ from alert_flash import AlertFlashState
 from alert_beep import AlertBeepState
 from camera_config_utils import save_cameras
 from ui_utils import reorder_camera_order, filter_alarm_events
+from logging_setup import setup_logging
+from notifier import AlarmNotifier
+from system_monitor import SystemMonitor
+from ui_theme import build_qss, get_theme
+from ui_toast import ToastManager
+from alarm_exporter import export_alarm_events_csv
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -59,14 +68,37 @@ class MainWindow(QMainWindow):
         self.cooldown_seconds = int(alarm_cfg.get("cooldown_seconds", 10))
         self.interval_s = float(alarm_cfg.get("interval_s", 0.2))
 
+        perf_cfg = self.config.get("perf", {}) or {}
+        max_fps = float(perf_cfg.get("max_fps", 0) or 0)
+        if max_fps > 0:
+            self.interval_s = max(self.interval_s, 1.0 / max_fps)
+        self.infer_size = int(perf_cfg.get("infer_size", 0) or 0)
+        self.heartbeat_timeout = float(perf_cfg.get("heartbeat_timeout", 5.0) or 0)
+
         self.model_path = BASE_DIR / self.config.get("model_path", "best.pt")
         self.output_dir = BASE_DIR / self.config.get("output_dir", "results")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.alarm_dir = self.output_dir / "alarms"
         self.alarm_dir.mkdir(parents=True, exist_ok=True)
         self.event_log_path = self.output_dir / "events.csv"
+        setup_logging(str(self.output_dir), self.config.get("logging", {}))
+        self.notifier = AlarmNotifier(self.config.get("webhook", {}))
+        self.system_monitor = SystemMonitor()
+        self.theme_name = str(self.config.get("theme", "dark")).lower()
+        self.theme = get_theme(self.theme_name)
+        self.toasts = None
 
-        self.model = YOLO(str(self.model_path))
+        try:
+            if not self.model_path.exists():
+                raise FileNotFoundError(f"模型文件不存在: {self.model_path}")
+            self.model = YOLO(str(self.model_path))
+        except Exception as e:
+            QMessageBox.critical(
+                None,
+                "模型加载失败",
+                f"无法加载 YOLO 模型：\n{self.model_path}\n\n错误信息：\n{e}",
+            )
+            raise SystemExit(1)
         self.model_lock = Lock()
         self.alarm_tracker = AlarmTracker(self.hit_threshold, self.cooldown_seconds)
         self.alert_count = 0
@@ -93,12 +125,19 @@ class MainWindow(QMainWindow):
 
         self.setup_ui()
         self.setup_styles()
+        self.toasts = ToastManager(self)
+
+        self.sys_timer = QTimer(self)
+        self.sys_timer.setInterval(2000)
+        self.sys_timer.timeout.connect(self.refresh_system_stats)
+        self.sys_timer.start()
+        self.refresh_system_stats()
 
     def load_config_safe(self) -> dict:
         try:
             return load_config(str(CONFIG_PATH))
         except Exception as e:
-            print(f"配置加载失败: {e}")
+            logger.exception("配置加载失败: %s", e)
             return {}
 
     def setup_ui(self):
@@ -115,7 +154,7 @@ class MainWindow(QMainWindow):
         title_label.setFont(QFont("Microsoft YaHei", 14, QFont.Weight.Bold))
         self.lbl_online = QLabel(f"在线: 0/{len(self.cameras)}")
         self.lbl_alerts = QLabel("今日告警: 0")
-        self.lbl_gpu = QLabel("GPU: -")
+        self.lbl_gpu = QLabel("CPU: - | 内存: - | GPU: -")
         self.lbl_net = QLabel("网络: 正常")
         self.lbl_time = QLabel("时间: --:--")
         status_bar.addWidget(title_label)
@@ -158,26 +197,29 @@ class MainWindow(QMainWindow):
 
         gb_source = QGroupBox("视频源控制")
         layout_source = QGridLayout()
-        self.btn_open_cam = QPushButton("启动全部")
-        self.btn_stop = QPushButton("停止全部")
+        self.btn_open_cam = QPushButton("▶  启动全部")
+        self.btn_stop = QPushButton("■  停止全部")
         self.btn_open_cam.clicked.connect(self.start_all)
         self.btn_stop.clicked.connect(self.stop_all)
         layout_source.addWidget(self.btn_open_cam, 0, 0)
         layout_source.addWidget(self.btn_stop, 0, 1)
 
-        self.btn_video = QPushButton("导入视频(主画面)")
-        self.btn_img = QPushButton("导入图片(主画面)")
+        self.btn_video = QPushButton("▤  导入视频")
+        self.btn_img = QPushButton("▦  导入图片")
         self.btn_video.clicked.connect(self.select_video)
         self.btn_img.clicked.connect(self.select_image)
         layout_source.addWidget(self.btn_video, 1, 0)
         layout_source.addWidget(self.btn_img, 1, 1)
 
-        self.btn_pause = QPushButton("暂停全部")
+        self.btn_pause = QPushButton("‖  暂停全部")
         self.btn_pause.clicked.connect(self.toggle_pause)
         layout_source.addWidget(self.btn_pause, 2, 0, 1, 2)
-        self.btn_manage = QPushButton("摄像头管理")
+        self.btn_manage = QPushButton("⚙  摄像头管理")
         self.btn_manage.clicked.connect(self.open_camera_manager)
         layout_source.addWidget(self.btn_manage, 3, 0, 1, 2)
+        self.btn_theme = QPushButton("切换浅色" if self.theme_name == "dark" else "切换深色")
+        self.btn_theme.clicked.connect(self.toggle_theme)
+        layout_source.addWidget(self.btn_theme, 4, 0, 1, 2)
         gb_source.setLayout(layout_source)
         right_panel.addWidget(gb_source)
 
@@ -204,7 +246,9 @@ class MainWindow(QMainWindow):
         self.lbl_fps = QLabel("用时: 0.00s")
         self.lbl_count = QLabel("目标数: 0")
         self.lbl_conf_large = QLabel("0.00%")
-        self.lbl_conf_large.setStyleSheet("font-size: 22px; color: #0078d7; font-weight: bold;")
+        self.lbl_conf_large.setStyleSheet(
+            f"font-size: 24px; color: {self.theme.primary}; font-weight: bold;"
+        )
         self.lbl_conf_large.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout_info.addWidget(self.lbl_status)
         layout_info.addWidget(self.lbl_fps)
@@ -236,6 +280,9 @@ class MainWindow(QMainWindow):
         self.alarm_level.currentTextChanged.connect(self.refresh_alarm_table)
         filter_row.addWidget(self.alarm_search)
         filter_row.addWidget(self.alarm_level)
+        self.btn_export = QPushButton("导出")
+        self.btn_export.clicked.connect(self.export_alarms)
+        filter_row.addWidget(self.btn_export)
         alarm_layout.addLayout(filter_row)
         self.alarm_table = QTableWidget()
         self.alarm_table.setColumnCount(4)
@@ -250,8 +297,10 @@ class MainWindow(QMainWindow):
         right_panel.addStretch()
 
         row_btns = QHBoxLayout()
-        btn_snap = QPushButton("保存截图 (到文件夹)")
-        btn_snap.setStyleSheet("background-color: #ffcccc; color: #cc0000; font-weight: bold;")
+        btn_snap = QPushButton("◉  保存截图")
+        btn_snap.setStyleSheet(
+            f"background-color: {self.theme.danger}; color: #ffffff; font-weight: bold; border: none;"
+        )
         btn_snap.clicked.connect(self.save_screenshot)
         btn_snap.setFixedHeight(42)
         row_btns.addWidget(btn_snap)
@@ -268,16 +317,39 @@ class MainWindow(QMainWindow):
         self.primary_tile = self.tile_by_id[self.primary_cam_id]
 
     def setup_styles(self):
-        self.setStyleSheet("""
-            QMainWindow { background-color: #f3f3f3; }
-            QLabel { color: #333; font-family: 'Segoe UI', sans-serif; }
-            QGroupBox { font-weight: bold; border: 1px solid #ccc; border-radius: 6px; margin-top: 10px; padding-top: 10px; }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-            QPushButton { background-color: #fff; border: 1px solid #bbb; border-radius: 4px; padding: 6px; }
-            QPushButton:hover { background-color: #e6f7ff; border-color: #1890ff; }
-            QPushButton:pressed { background-color: #bae7ff; }
-            QTableWidget { gridline-color: #ddd; background-color: #fff; }
-        """)
+        self.setStyleSheet(build_qss(self.theme))
+        border_color = self.theme.border
+        self.main_widget.setStyleSheet(f"border: 4px solid transparent;")
+        # 保存按钮保持告警红强调色
+        try:
+            self.lbl_conf_large.setStyleSheet(
+                f"font-size: 24px; color: {self.theme.primary}; font-weight: bold;"
+            )
+        except Exception:
+            pass
+
+    def toggle_theme(self):
+        self.theme_name = "light" if self.theme_name == "dark" else "dark"
+        self.theme = get_theme(self.theme_name)
+        self.setup_styles()
+        try:
+            self.btn_theme.setText(("切换浅色" if self.theme_name == "dark" else "切换深色"))
+        except Exception:
+            pass
+        self._save_theme_to_config()
+        if self.toasts:
+            self.toasts.show(f"已切换至{'深色' if self.theme_name == 'dark' else '浅色'}主题", level="info")
+
+    def _save_theme_to_config(self):
+        try:
+            import json
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["theme"] = self.theme_name
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            logger.debug("写入主题配置失败: %s", exc)
 
     def build_grid(self):
         while self.grid_layout.count():
@@ -376,7 +448,7 @@ class MainWindow(QMainWindow):
         self.online_cams = set()
         self.update_online_label()
         self.paused = False
-        self.btn_pause.setText("暂停全部")
+        self.btn_pause.setText("‖  暂停全部")
         for tile in self.tile_by_id.values():
             tile.video_label.clear()
             tile.video_label.setText("已停止")
@@ -392,10 +464,10 @@ class MainWindow(QMainWindow):
         for worker in self.workers.values():
             worker.set_paused(self.paused)
         if self.paused:
-            self.btn_pause.setText("继续全部")
+            self.btn_pause.setText("▶  继续全部")
             self.lbl_status.setText("已暂停")
         else:
-            self.btn_pause.setText("暂停全部")
+            self.btn_pause.setText("‖  暂停全部")
             self.lbl_status.setText("运行中")
 
     def toggle_fullscreen(self):
@@ -436,6 +508,8 @@ class MainWindow(QMainWindow):
             model_lock=self.model_lock,
             conf_threshold=self.conf_threshold,
             interval_s=self.interval_s,
+            infer_size=self.infer_size,
+            heartbeat_timeout=self.heartbeat_timeout,
         )
         worker.frame_signal.connect(self.on_frame)
         worker.result_signal.connect(self.on_result)
@@ -451,7 +525,7 @@ class MainWindow(QMainWindow):
             tile.set_frame(qt_img)
             fps = 0 if inference_time <= 0 else int(1.0 / inference_time)
             tile.meta_label.setText(f"FPS: {fps}  |  目标: {count}")
-            tile.set_status("ONLINE", "#1a7f37")
+            tile.set_status("ONLINE", self.theme.success)
 
         if cam_id == self.primary_cam_id:
             self.lbl_fps.setText(f"用时: {inference_time:.3f}s")
@@ -509,11 +583,11 @@ class MainWindow(QMainWindow):
         tile = self.tile_by_id.get(cam_id)
         if tile:
             if status == "ONLINE":
-                tile.set_status("ONLINE", "#1a7f37")
+                tile.set_status("ONLINE", self.theme.success)
             elif status == "RECONNECTING":
-                tile.set_status("RECONNECTING", "#f0a000")
+                tile.set_status("RECONNECTING", self.theme.warning)
             else:
-                tile.set_status("OFFLINE", "#999")
+                tile.set_status("OFFLINE", self.theme.text_muted)
         if status == "ONLINE":
             self.online_cams.add(cam_id)
         else:
@@ -528,7 +602,7 @@ class MainWindow(QMainWindow):
         if tile:
             tile.set_status("OFFLINE", "#999")
         self.lbl_status.setText(f"{cam_id} 离线")
-        print(f"{cam_id} 错误: {msg}")
+        logger.warning("%s 错误: %s", cam_id, msg)
 
     def save_alarm_images_for(self, cam_id: str, ts: float):
         results = self.latest_results.get(cam_id)
@@ -539,15 +613,19 @@ class MainWindow(QMainWindow):
             annotated = results.plot()
             return save_alarm_images(str(self.alarm_dir), cam_id, ts, orig_img, annotated)
         except Exception as exc:
-            print(f"保存告警截图失败: {exc}")
+            logger.exception("保存告警截图失败: %s", exc)
             return None, None
+
+    ALARM_TABLE_MAX_ROWS = 500
 
     def refresh_alarm_table(self):
         text = self.alarm_search.text() if hasattr(self, "alarm_search") else ""
         level = self.alarm_level.currentText() if hasattr(self, "alarm_level") else "all"
         self.filtered_alarm_events = filter_alarm_events(self.alarm_events, text, level)
+        # 仅渲染最新 N 条，避免大数据量 QTableWidget 卡顿（完整数据仍在 filtered_alarm_events 中用于导出）
+        visible = self.filtered_alarm_events[-self.ALARM_TABLE_MAX_ROWS:]
         self.alarm_table.setRowCount(0)
-        for i, ev in enumerate(self.filtered_alarm_events):
+        for i, ev in enumerate(visible):
             self.alarm_table.insertRow(i)
             self.alarm_table.setItem(i, 0, QTableWidgetItem(ev.get("time", "")))
             self.alarm_table.setItem(i, 1, QTableWidgetItem(ev.get("camera", "")))
@@ -564,13 +642,21 @@ class MainWindow(QMainWindow):
         tile = self.tile_by_id.get(cam_id)
         if not tile:
             return
-        tile.video_label.setStyleSheet("background-color: #222; border: 3px solid #ff3b30;")
-        QTimer.singleShot(2000, lambda: tile.video_label.setStyleSheet("background-color: #222; border: 1px solid #444;"))
+        tile.video_label.setStyleSheet(
+            f"background-color: {self.theme.video_bg}; border: 3px solid {self.theme.danger}; border-radius: 6px;"
+        )
+        QTimer.singleShot(
+            2000,
+            lambda: tile.video_label.setStyleSheet(
+                f"background-color: {self.theme.video_bg}; border: 1px solid {self.theme.tile_border}; border-radius: 6px;"
+            ),
+        )
 
     def open_alarm_detail(self, row: int, _col: int):
-        if row >= len(self.filtered_alarm_events):
+        visible = self.filtered_alarm_events[-self.ALARM_TABLE_MAX_ROWS:]
+        if row >= len(visible):
             return
-        event = self.filtered_alarm_events[row]
+        event = visible[row]
         dialog = QDialog(self)
         dialog.setWindowTitle("告警详情")
         dialog.resize(720, 480)
@@ -631,9 +717,42 @@ class MainWindow(QMainWindow):
         self.cameras = cameras
         self.lbl_status.setText("摄像头配置已保存，重启后生效")
 
+    def export_alarms(self) -> None:
+        if not self.filtered_alarm_events:
+            QMessageBox.information(self, "提示", "当前没有可导出的告警事件")
+            return
+        default_name = time.strftime("alarms_%Y%m%d_%H%M%S.csv")
+        default_path = str(self.output_dir / default_name)
+        path, _ = QFileDialog.getSaveFileName(self, "导出告警 CSV", default_path, "CSV (*.csv)")
+        if not path:
+            return
+        try:
+            n = export_alarm_events_csv(path, self.filtered_alarm_events)
+        except Exception as exc:
+            QMessageBox.critical(self, "导出失败", str(exc))
+            return
+        if self.toasts:
+            self.toasts.show(f"已导出 {n} 条告警至 {os.path.basename(path)}", level="success")
+
+    def refresh_system_stats(self) -> None:
+        try:
+            stats = self.system_monitor.sample()
+            self.lbl_gpu.setText(self.system_monitor.format_stats(stats))
+        except Exception as exc:
+            logger.debug("系统状态刷新失败: %s", exc)
+
     def notify_event(self, event: dict) -> None:
-        # TODO: integrate DingTalk/WeChat webhook here
-        print(f"告警通知: {event}")
+        logger.info("告警通知: %s", event)
+        try:
+            self.notifier.notify(event)
+        except Exception as exc:
+            logger.warning("webhook 通知异常: %s", exc)
+        if self.toasts:
+            self.toasts.show(
+                f"火警告警 · {event.get('camera', '')} · {event.get('time', '')}",
+                level="danger",
+                duration_ms=4000,
+            )
 
     def trigger_alert_visual(self):
         self.alert_flash_state = AlertFlashState(cycles=8)
@@ -673,7 +792,7 @@ class MainWindow(QMainWindow):
         try:
             # 保存图片
             self.primary_tile.video_label.pixmap().save(full_path)
-            print(f"截图成功: {full_path}")
+            logger.info("截图成功: %s", full_path)
             
             # 弹窗提示成功 (这样你不需要去文件夹看就知道成了没)
             QMessageBox.information(self, "保存成功", f"截图已保存至:\n{full_path}")
@@ -684,7 +803,36 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "保存失败", f"无法写入文件:\n{str(e)}")
     # ========================================
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        try:
+            if self.grid_cols_cfg:
+                return
+            right_width = 320
+            avail = compute_available_grid_width(self.width(), right_width, 80)
+            new_cols = resolve_grid_cols(
+                config_cols=None,
+                available_width=avail,
+                tile_w=CAM_TILE_MIN_W,
+                spacing=self.grid_layout.spacing(),
+                max_cols=4,
+            )
+            if new_cols != self.grid_cols and new_cols > 0:
+                self.grid_cols = new_cols
+                self.build_grid()
+        except Exception as exc:
+            logger.debug("resize 重排失败: %s", exc)
+
     def closeEvent(self, event):
+        try:
+            if self.alert_timer.isActive():
+                self.alert_timer.stop()
+            if self.beep_timer.isActive():
+                self.beep_timer.stop()
+            if hasattr(self, "sys_timer") and self.sys_timer.isActive():
+                self.sys_timer.stop()
+        except Exception:
+            pass
         self.stop_all(clear_tables=False)
         event.accept()
 

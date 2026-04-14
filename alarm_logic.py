@@ -16,8 +16,11 @@ class AlarmTracker:
 
     def update(self, cam_id: str, hit: bool, ts: float):
         st = self.state.setdefault(cam_id, AlarmState())
-        st.hits = st.hits + 1 if hit else 0
-        if st.hits >= self.hit_threshold:
+        if not hit:
+            st.hits = 0
+            return None
+        st.hits += 1
+        if st.hits == self.hit_threshold:
             if ts - st.last_alert_ts >= self.cooldown_seconds:
                 st.last_alert_ts = ts
                 return {"camera": cam_id, "level": "confirm", "ts": ts}
