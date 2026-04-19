@@ -30,6 +30,13 @@ DEFAULT_CONFIG = {
     "webhook": {
         "dingtalk_url": "",
         "wecom_url": "",
+        "email": {
+            "smtp_host": "",
+            "smtp_port": 587,
+            "from": "",
+            "password": "",
+            "to": [],
+        },
     },
 }
 

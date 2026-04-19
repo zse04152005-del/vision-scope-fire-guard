@@ -40,6 +40,16 @@ class CameraWorker(QThread):
         self.heartbeat_timeout = float(heartbeat_timeout) if heartbeat_timeout else 0.0
         self.running = False
         self.paused = False
+        self._is_local = self._check_local_source(source)
+
+    @staticmethod
+    def _check_local_source(source) -> bool:
+        if isinstance(source, str):
+            lower = source.lower()
+            if lower.startswith(("rtsp://", "http://", "https://")):
+                return False
+            return True
+        return False
 
     @property
     def conf_threshold(self) -> float:
@@ -79,6 +89,9 @@ class CameraWorker(QThread):
                 and now_ts - last_frame_ts > self.heartbeat_timeout
             )
             if (not ret or frame is None or frame.size == 0) or heartbeat_stale:
+                if not ret and self._is_local:
+                    self.status_signal.emit(self.cam_id, "EOF")
+                    break
                 fail_count += 1
                 if fail_count >= 30 or heartbeat_stale:
                     self.status_signal.emit(self.cam_id, "RECONNECTING")
@@ -122,9 +135,9 @@ class CameraWorker(QThread):
                 results = self.model(infer_frame, conf=conf)[0]
             inference_time = time.time() - t0
 
-            annotated = results.plot()
-            qt_img = self.convert_cv_qt(annotated)
             count = len(results.boxes)
+            annotated = results.plot() if count > 0 else infer_frame
+            qt_img = self.convert_cv_qt(annotated)
             max_conf = float(results.boxes[0].conf) if count > 0 else 0.0
 
             self.frame_signal.emit(self.cam_id, qt_img, inference_time, count, max_conf)

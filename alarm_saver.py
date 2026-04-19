@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_alarm_paths(output_dir: str, cam_id: str, ts: float) -> Tuple[str, str]:
-    ts_str = time.strftime("%Y%m%d_%H%M%S", time.gmtime(ts))
+    ts_str = time.strftime("%Y%m%d_%H%M%S", time.localtime(ts))
     base = f"{cam_id}_{ts_str}"
     orig_path = os.path.join(output_dir, f"{base}_orig.jpg")
     ann_path = os.path.join(output_dir, f"{base}_annotated.jpg")

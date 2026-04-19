@@ -35,5 +35,18 @@ class TestCameraWorkerPerfParams(unittest.TestCase):
         self.assertAlmostEqual(w.conf_threshold, 0.3)
 
 
+    def test_local_source_detection(self):
+        w = self._make(source="/path/to/video.mp4")
+        self.assertTrue(w._is_local)
+
+    def test_rtsp_source_not_local(self):
+        w = self._make(source="rtsp://192.168.1.1:554/stream")
+        self.assertFalse(w._is_local)
+
+    def test_int_source_not_local(self):
+        w = self._make(source=0)
+        self.assertFalse(w._is_local)
+
+
 if __name__ == "__main__":
     unittest.main()

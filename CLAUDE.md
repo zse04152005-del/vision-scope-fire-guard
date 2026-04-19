@@ -24,6 +24,7 @@ fire_detection_system.py        主窗口（MainWindow），协调所有模块
 ├── alarm_saver.py              告警截图保存（原图+标注图）
 ├── alert_flash.py              告警红框闪烁状态
 ├── alert_beep.py               告警蜂鸣状态
+├── ui_panels.py                右侧标签页 + 状态栏工厂函数
 ├── ui_components.py            CameraTile、网格/滚动区构造
 ├── ui_utils.py                 列表重排、事件过滤等纯函数
 ├── camera_config_utils.py      source 归一化、配置持久化
@@ -31,7 +32,7 @@ fire_detection_system.py        主窗口（MainWindow），协调所有模块
 ├── config.json                 运行配置（模型路径、告警阈值、摄像头列表）
 ├── best.pt                     YOLOv8 权重
 ├── results/                    告警截图 + 事件 CSV 输出目录
-└── tests/                      单元测试（18 个）
+└── tests/                      单元测试（53 个）
 ```
 
 **数据流：** 摄像头源 → `CameraWorker`（采集+推理，model_lock 保护）→ `AlarmTracker`（去抖/冷却）→ `save_alarm_images` + `write_event` + 主窗口 UI 更新（信号槽）。
@@ -89,5 +90,24 @@ pip install ultralytics opencv-python PyQt6 numpy
 | 2026-04-14 | [U6] 告警中心渲染上限 | `ALARM_TABLE_MAX_ROWS=500` 仅渲染最新 N 条，完整数据供导出与过滤用 |
 | 2026-04-14 | [U7] 主题常量化收尾 | 主窗 `on_frame`/`on_status`/`highlight_camera`/`lbl_conf_large` 全部改用 `self.theme.*` |
 | 2026-04-14 | 修复 Toast 清理崩溃 | `ToastManager._remove/_relayout` 捕获父窗口销毁时的 `RuntimeError` |
+| 2026-04-19 | [P0] alarm_events 内存上限 | `MAX_ALARM_EVENTS=10000` FIFO 淘汰，避免 24h+ 内存膨胀 |
+| 2026-04-19 | [P0] 0 摄像头提示 | 未配置时弹窗引导至摄像头管理，禁用启动按钮，仅保留 1 个占位 cam |
+| 2026-04-19 | [P0] 输出目录写权限检测 | `output_dir` 不可写时弹窗提示并退出 |
+| 2026-04-19 | [P0] 截图时间戳改用 localtime | `alarm_saver.build_alarm_paths` gmtime→localtime，测试同步更新 |
+| 2026-04-19 | [P0] 状态栏时间实时更新 | `refresh_system_stats` 中同步刷新 `lbl_time`，每 2s 更新 |
+| 2026-04-19 | [F] 告警消音 ESC + 按钮 | ESC 键 / 「✕ 消音」按钮一键停止蜂鸣 + 闪烁 |
+| 2026-04-19 | [F] 视频 EOF 处理 | 本地文件播完 break 而非重连；tile 显示「播放结束」 |
+| 2026-04-19 | [F] requirements.txt | 新增依赖清单，`pip install -r requirements.txt`；49/49 绿 |
+| 2026-04-19 | [U] 右侧 QTabWidget 重构 | 6 个 GroupBox → 3 个标签页（控制台/告警中心/系统状态），告警表高度不再固定 |
+| 2026-04-19 | [F] 告警统计面板 | 告警中心 tab 底部显示「今日总计 / 最频繁摄像头」 |
+| 2026-04-19 | [UX] 自动跳转 + 滚动 | 新告警自动切到告警中心 tab + scrollToBottom |
+| 2026-04-19 | [F] SMTP 邮件通知 | `notifier.py` 扩展 `_send_email`（SMTP+TLS），异步 daemon 线程 |
+| 2026-04-19 | [F] RTSP 密码环境变量 | `camera_config_utils` 支持 `${VAR}` 占位符，避免明文密码 |
+| 2026-04-19 | [F] Headless 无头模式 | `--headless` 参数启动纯推理+日志+通知，无 GUI，支持 SIGINT/SIGTERM 优雅退出 |
+| 2026-04-19 | 新增 4 项单测 | env_expand × 4；53/53 绿 |
+| 2026-04-19 | [UX] 快捷键 Ctrl+S/Ctrl+E/Space | 截图、导出告警、暂停/继续一键操作 |
+| 2026-04-19 | [Perf] result_table 差分更新 | 仅更新变化单元格，避免每帧清空+重建 |
+| 2026-04-19 | [Perf] plot() 跳过优化 | 无检测结果时跳过 results.plot()，减少绘图开销 |
+| 2026-04-19 | [Refactor] 主文件拆分 | 新增 `ui_panels.py`，setup_ui 中三个 Tab + 状态栏构建提取为工厂函数；主文件 1033→876 行 |
 
 <!-- 后续每次变更请在此追加一行：日期 / 变更内容 / 备注 -->

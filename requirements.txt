@@ -1,0 +1,8 @@
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+PyQt6>=6.6.0
+psutil>=5.9.0
+# 可选：Webhook 通知
+requests>=2.31.0
+# 可选：NVIDIA GPU 监控
+# pynvml>=11.0.0

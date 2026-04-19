@@ -5,12 +5,13 @@ import os
 from pathlib import Path
 from threading import Lock
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QLabel,
-                             QVBoxLayout, QHBoxLayout, QPushButton, QSlider,
-                             QGroupBox, QFileDialog, QDialog, QLineEdit, QComboBox,
+                             QVBoxLayout, QHBoxLayout, QPushButton,
+                             QFileDialog, QDialog,
                              QTableWidget, QTableWidgetItem, QHeaderView,
-                             QGridLayout, QSpinBox, QSizePolicy, QMessageBox)
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
-from PyQt6.QtGui import QImage, QFont, QPixmap, QKeySequence, QShortcut
+                             QGridLayout, QSizePolicy, QMessageBox,
+                             QTabWidget)
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QShortcut
 from ultralytics import YOLO
 from ui_components import (
     build_grid_positions,
@@ -39,6 +40,7 @@ from system_monitor import SystemMonitor
 from ui_theme import build_qss, get_theme
 from ui_toast import ToastManager
 from alarm_exporter import export_alarm_events_csv
+from ui_panels import build_status_bar, build_control_tab, build_alarm_tab, build_status_tab
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +56,9 @@ class MainWindow(QMainWindow):
         self.config = self.load_config_safe()
         self.cameras = self.config.get("cameras", [])
         self.grid_cols_cfg = self.config.get("grid_cols")
-        if not self.cameras:
-            self.cameras = [
-                {"id": f"cam{i+1:02d}", "name": f"Cam{i+1:02d}", "source": i}
-                for i in range(12)
-            ]
+        self._no_cameras_configured = not self.cameras
+        if self._no_cameras_configured:
+            self.cameras = [{"id": "cam01", "name": "Default", "source": 0}]
         self.camera_order = [cam.get("id", f"cam{i+1:02d}") for i, cam in enumerate(self.cameras)]
         self.primary_cam_id = self.camera_order[0] if self.camera_order else ""
 
@@ -77,10 +77,20 @@ class MainWindow(QMainWindow):
 
         self.model_path = BASE_DIR / self.config.get("model_path", "best.pt")
         self.output_dir = BASE_DIR / self.config.get("output_dir", "results")
-        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.alarm_dir = self.output_dir / "alarms"
-        self.alarm_dir.mkdir(parents=True, exist_ok=True)
         self.event_log_path = self.output_dir / "events.csv"
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self.alarm_dir.mkdir(parents=True, exist_ok=True)
+            _test = self.output_dir / ".write_test"
+            _test.touch()
+            _test.unlink()
+        except OSError as exc:
+            QMessageBox.critical(
+                None, "输出目录不可写",
+                f"无法写入输出目录：\n{self.output_dir}\n\n错误：{exc}\n\n请检查路径权限或修改 config.json 中的 output_dir。",
+            )
+            raise SystemExit(1)
         setup_logging(str(self.output_dir), self.config.get("logging", {}))
         self.notifier = AlarmNotifier(self.config.get("webhook", {}))
         self.system_monitor = SystemMonitor()
@@ -118,6 +128,14 @@ class MainWindow(QMainWindow):
         self.beep_state = AlertBeepState(0)
         self.shortcut_fullscreen = QShortcut(QKeySequence("F11"), self)
         self.shortcut_fullscreen.activated.connect(self.toggle_fullscreen)
+        self.shortcut_mute = QShortcut(QKeySequence("Escape"), self)
+        self.shortcut_mute.activated.connect(self.dismiss_alert)
+        self.shortcut_screenshot = QShortcut(QKeySequence("Ctrl+S"), self)
+        self.shortcut_screenshot.activated.connect(self.save_screenshot)
+        self.shortcut_export = QShortcut(QKeySequence("Ctrl+E"), self)
+        self.shortcut_export.activated.connect(self.export_alarms)
+        self.shortcut_pause = QShortcut(QKeySequence("Space"), self)
+        self.shortcut_pause.activated.connect(self.toggle_pause)
         self.zoom_dialog = None
         self.zoom_label = None
         self.zoom_cam_id = None
@@ -126,6 +144,14 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.setup_styles()
         self.toasts = ToastManager(self)
+
+        if self._no_cameras_configured:
+            self.btn_open_cam.setEnabled(False)
+            self.lbl_status.setText("未配置摄像头，请点击「摄像头管理」添加")
+            QTimer.singleShot(500, lambda: QMessageBox.information(
+                self, "首次运行",
+                "当前未配置摄像头。\n请点击右侧「⚙ 摄像头管理」添加摄像头后重启。"
+            ))
 
         self.sys_timer = QTimer(self)
         self.sys_timer.setInterval(2000)
@@ -149,24 +175,7 @@ class MainWindow(QMainWindow):
         self.main_widget.setStyleSheet("border: 4px solid transparent;")
 
         # 顶部状态栏
-        status_bar = QHBoxLayout()
-        title_label = QLabel(WINDOW_TITLE)
-        title_label.setFont(QFont("Microsoft YaHei", 14, QFont.Weight.Bold))
-        self.lbl_online = QLabel(f"在线: 0/{len(self.cameras)}")
-        self.lbl_alerts = QLabel("今日告警: 0")
-        self.lbl_gpu = QLabel("CPU: - | 内存: - | GPU: -")
-        self.lbl_net = QLabel("网络: 正常")
-        self.lbl_time = QLabel("时间: --:--")
-        status_bar.addWidget(title_label)
-        status_bar.addStretch()
-        status_bar.addWidget(self.lbl_online)
-        status_bar.addWidget(self.lbl_alerts)
-        status_bar.addWidget(self.lbl_gpu)
-        status_bar.addWidget(self.lbl_net)
-        status_bar.addWidget(self.lbl_time)
-        status_container = QWidget()
-        status_container.setLayout(status_bar)
-        root_layout.addWidget(status_container)
+        root_layout.addWidget(build_status_bar(self, self.cameras, WINDOW_TITLE))
 
         # 主体区域
         body_layout = QHBoxLayout()
@@ -192,126 +201,13 @@ class MainWindow(QMainWindow):
         self.grid_scroll = build_scroll_area(self.grid_container)
         body_layout.addWidget(self.grid_scroll, stretch=7)
 
-        # 右侧：控制 + 信息 + 告警中心
-        right_panel = QVBoxLayout()
-
-        gb_source = QGroupBox("视频源控制")
-        layout_source = QGridLayout()
-        self.btn_open_cam = QPushButton("▶  启动全部")
-        self.btn_stop = QPushButton("■  停止全部")
-        self.btn_open_cam.clicked.connect(self.start_all)
-        self.btn_stop.clicked.connect(self.stop_all)
-        layout_source.addWidget(self.btn_open_cam, 0, 0)
-        layout_source.addWidget(self.btn_stop, 0, 1)
-
-        self.btn_video = QPushButton("▤  导入视频")
-        self.btn_img = QPushButton("▦  导入图片")
-        self.btn_video.clicked.connect(self.select_video)
-        self.btn_img.clicked.connect(self.select_image)
-        layout_source.addWidget(self.btn_video, 1, 0)
-        layout_source.addWidget(self.btn_img, 1, 1)
-
-        self.btn_pause = QPushButton("‖  暂停全部")
-        self.btn_pause.clicked.connect(self.toggle_pause)
-        layout_source.addWidget(self.btn_pause, 2, 0, 1, 2)
-        self.btn_manage = QPushButton("⚙  摄像头管理")
-        self.btn_manage.clicked.connect(self.open_camera_manager)
-        layout_source.addWidget(self.btn_manage, 3, 0, 1, 2)
-        self.btn_theme = QPushButton("切换浅色" if self.theme_name == "dark" else "切换深色")
-        self.btn_theme.clicked.connect(self.toggle_theme)
-        layout_source.addWidget(self.btn_theme, 4, 0, 1, 2)
-        gb_source.setLayout(layout_source)
-        right_panel.addWidget(gb_source)
-
-        gb_param = QGroupBox("参数调节")
-        layout_param = QVBoxLayout()
-        row_conf = QHBoxLayout()
-        row_conf.addWidget(QLabel("置信度:"))
-        self.conf_spin = QSpinBox()
-        self.conf_spin.setRange(0, 100)
-        self.conf_spin.setValue(50)
-        row_conf.addWidget(self.conf_spin)
-        layout_param.addLayout(row_conf)
-        self.conf_slider = QSlider(Qt.Orientation.Horizontal)
-        self.conf_slider.setRange(0, 100)
-        self.conf_slider.setValue(50)
-        self.conf_slider.valueChanged.connect(self.update_conf)
-        layout_param.addWidget(self.conf_slider)
-        gb_param.setLayout(layout_param)
-        right_panel.addWidget(gb_param)
-
-        gb_info = QGroupBox("实时信息")
-        layout_info = QVBoxLayout()
-        self.lbl_status = QLabel("状态: 待机")
-        self.lbl_fps = QLabel("用时: 0.00s")
-        self.lbl_count = QLabel("目标数: 0")
-        self.lbl_conf_large = QLabel("0.00%")
-        self.lbl_conf_large.setStyleSheet(
-            f"font-size: 24px; color: {self.theme.primary}; font-weight: bold;"
-        )
-        self.lbl_conf_large.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout_info.addWidget(self.lbl_status)
-        layout_info.addWidget(self.lbl_fps)
-        layout_info.addWidget(self.lbl_count)
-        layout_info.addWidget(QLabel("最高置信度:"))
-        layout_info.addWidget(self.lbl_conf_large)
-        gb_info.setLayout(layout_info)
-        right_panel.addWidget(gb_info)
-
-        gb_detail = QGroupBox("检测详情")
-        detail_layout = QVBoxLayout()
-        self.result_table = QTableWidget()
-        self.result_table.setColumnCount(4)
-        self.result_table.setHorizontalHeaderLabels(["序号", "类别", "置信度", "坐标"])
-        self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.result_table.setFixedHeight(160)
-        detail_layout.addWidget(self.result_table)
-        gb_detail.setLayout(detail_layout)
-        right_panel.addWidget(gb_detail)
-
-        gb_alarm = QGroupBox("告警中心")
-        alarm_layout = QVBoxLayout()
-        filter_row = QHBoxLayout()
-        self.alarm_search = QLineEdit()
-        self.alarm_search.setPlaceholderText("搜索摄像头/时间")
-        self.alarm_level = QComboBox()
-        self.alarm_level.addItems(["all", "confirm", "warn"])
-        self.alarm_search.textChanged.connect(self.refresh_alarm_table)
-        self.alarm_level.currentTextChanged.connect(self.refresh_alarm_table)
-        filter_row.addWidget(self.alarm_search)
-        filter_row.addWidget(self.alarm_level)
-        self.btn_export = QPushButton("导出")
-        self.btn_export.clicked.connect(self.export_alarms)
-        filter_row.addWidget(self.btn_export)
-        alarm_layout.addLayout(filter_row)
-        self.alarm_table = QTableWidget()
-        self.alarm_table.setColumnCount(4)
-        self.alarm_table.setHorizontalHeaderLabels(["时间", "摄像头", "等级", "状态"])
-        self.alarm_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.alarm_table.setFixedHeight(220)
-        self.alarm_table.cellDoubleClicked.connect(self.open_alarm_detail)
-        alarm_layout.addWidget(self.alarm_table)
-        gb_alarm.setLayout(alarm_layout)
-        right_panel.addWidget(gb_alarm)
-
-        right_panel.addStretch()
-
-        row_btns = QHBoxLayout()
-        btn_snap = QPushButton("◉  保存截图")
-        btn_snap.setStyleSheet(
-            f"background-color: {self.theme.danger}; color: #ffffff; font-weight: bold; border: none;"
-        )
-        btn_snap.clicked.connect(self.save_screenshot)
-        btn_snap.setFixedHeight(42)
-        row_btns.addWidget(btn_snap)
-        right_panel.addLayout(row_btns)
-
-        container_right = QWidget()
-        container_right.setLayout(right_panel)
-        container_right.setFixedWidth(320)
-        self.right_scroll = build_scroll_area(container_right, always_show_vertical=True)
-        self.right_scroll.setFixedWidth(330)
-        body_layout.addWidget(self.right_scroll)
+        # 右侧：标签页面板（控制台 / 告警中心 / 系统状态）
+        self.right_tabs = QTabWidget()
+        self.right_tabs.setFixedWidth(330)
+        self.right_tabs.addTab(build_control_tab(self, self.theme, self.theme_name), "控制台")
+        self.right_tabs.addTab(build_alarm_tab(self), "告警中心")
+        self.right_tabs.addTab(build_status_tab(self, self.theme), "系统状态")
+        body_layout.addWidget(self.right_tabs)
 
         self.primary_cam_id = self.camera_order[0]
         self.primary_tile = self.tile_by_id[self.primary_cam_id]
@@ -539,17 +435,23 @@ class MainWindow(QMainWindow):
             self.update_primary_details(results, inference_time)
 
     def update_primary_details(self, results, inference_time: float):
-        self.result_table.setRowCount(0)
-        if len(results.boxes) == 0:
-            return
+        new_count = len(results.boxes)
+        old_count = self.result_table.rowCount()
+        if new_count < old_count:
+            self.result_table.setRowCount(new_count)
+        elif new_count > old_count:
+            for _ in range(new_count - old_count):
+                self.result_table.insertRow(self.result_table.rowCount())
         for i, box in enumerate(results.boxes):
-            self.result_table.insertRow(i)
             cls_id = int(box.cls[0])
             coords = box.xyxy[0].cpu().numpy().astype(int)
-            self.result_table.setItem(i, 0, QTableWidgetItem(str(i+1)))
-            self.result_table.setItem(i, 1, QTableWidgetItem(results.names[cls_id]))
-            self.result_table.setItem(i, 2, QTableWidgetItem(f"{float(box.conf):.2f}"))
-            self.result_table.setItem(i, 3, QTableWidgetItem(str(coords)))
+            vals = [str(i + 1), results.names[cls_id], f"{float(box.conf):.2f}", str(coords)]
+            for col, val in enumerate(vals):
+                item = self.result_table.item(i, col)
+                if item is None:
+                    self.result_table.setItem(i, col, QTableWidgetItem(val))
+                elif item.text() != val:
+                    item.setText(val)
 
     def on_hit(self, cam_id: str, hit: bool, ts: float):
         event = self.alarm_tracker.update(cam_id, hit, ts)
@@ -575,7 +477,12 @@ class MainWindow(QMainWindow):
         write_event(str(self.event_log_path), event_record)
         self.notify_event(event_record)
         self.alarm_events.append(event_record)
+        if len(self.alarm_events) > self.MAX_ALARM_EVENTS:
+            self.alarm_events = self.alarm_events[-self.MAX_ALARM_EVENTS:]
         self.refresh_alarm_table()
+        self.refresh_alarm_stats()
+        self.alarm_table.scrollToBottom()
+        self.right_tabs.setCurrentIndex(1)
         self.trigger_alert_visual()
         self.highlight_camera(event["camera"])
 
@@ -586,6 +493,9 @@ class MainWindow(QMainWindow):
                 tile.set_status("ONLINE", self.theme.success)
             elif status == "RECONNECTING":
                 tile.set_status("RECONNECTING", self.theme.warning)
+            elif status == "EOF":
+                tile.set_status("EOF", self.theme.text_muted)
+                tile.video_label.setText("播放结束")
             else:
                 tile.set_status("OFFLINE", self.theme.text_muted)
         if status == "ONLINE":
@@ -616,6 +526,7 @@ class MainWindow(QMainWindow):
             logger.exception("保存告警截图失败: %s", exc)
             return None, None
 
+    MAX_ALARM_EVENTS = 10000
     ALARM_TABLE_MAX_ROWS = 500
 
     def refresh_alarm_table(self):
@@ -637,6 +548,20 @@ class MainWindow(QMainWindow):
                     if item:
                         item.setBackground(Qt.GlobalColor.red)
                         item.setForeground(Qt.GlobalColor.white)
+
+    def refresh_alarm_stats(self):
+        total = len(self.alarm_events)
+        self.lbl_alarm_total.setText(f"今日总计: {total}")
+        if total == 0:
+            self.lbl_alarm_top_cam.setText("最频繁: -")
+            self.lbl_alarm_avg_conf.setText("平均置信度: -")
+            return
+        cam_counts: dict[str, int] = {}
+        for ev in self.alarm_events:
+            cam = ev.get("camera", "")
+            cam_counts[cam] = cam_counts.get(cam, 0) + 1
+        top_cam = max(cam_counts, key=cam_counts.get)
+        self.lbl_alarm_top_cam.setText(f"最频繁: {top_cam} ({cam_counts[top_cam]}次)")
 
     def highlight_camera(self, cam_id: str):
         tile = self.tile_by_id.get(cam_id)
@@ -738,6 +663,7 @@ class MainWindow(QMainWindow):
         try:
             stats = self.system_monitor.sample()
             self.lbl_gpu.setText(self.system_monitor.format_stats(stats))
+            self.lbl_time.setText(f"时间: {time.strftime('%H:%M:%S')}")
         except Exception as exc:
             logger.debug("系统状态刷新失败: %s", exc)
 
@@ -775,6 +701,14 @@ class MainWindow(QMainWindow):
             self.beep_timer.stop()
             return
         QApplication.beep()
+
+    def dismiss_alert(self):
+        if self.alert_timer.isActive():
+            self.alert_timer.stop()
+        if self.beep_timer.isActive():
+            self.beep_timer.stop()
+        self.main_widget.setStyleSheet("border: 4px solid transparent;")
+        self.lbl_status.setText("告警已消音")
 
     # ============ 修复后的截图功能 ============
     def save_screenshot(self):
@@ -836,8 +770,107 @@ class MainWindow(QMainWindow):
         self.stop_all(clear_tables=False)
         event.accept()
 
+def run_headless():
+    """无头模式：仅启动推理 + 日志 + webhook，不创建 GUI。"""
+    import argparse
+    from config_loader import load_config as _load
+    config = _load(str(CONFIG_PATH))
+    output_dir = BASE_DIR / config.get("output_dir", "results")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "alarms").mkdir(parents=True, exist_ok=True)
+    setup_logging(str(output_dir), config.get("logging", {}))
+
+    model_path = BASE_DIR / config.get("model_path", "best.pt")
+    logger.info("Headless 模式启动，模型: %s", model_path)
+    model = YOLO(str(model_path))
+    model_lock = Lock()
+
+    alarm_cfg = config.get("alarm", {})
+    tracker = AlarmTracker(
+        int(alarm_cfg.get("hit_threshold", 3)),
+        int(alarm_cfg.get("cooldown_seconds", 10)),
+    )
+    notifier = AlarmNotifier(config.get("webhook", {}))
+    event_log_path = output_dir / "events.csv"
+    alarm_dir = output_dir / "alarms"
+    conf = float(alarm_cfg.get("conf_threshold", 0.5))
+    interval_s = float(alarm_cfg.get("interval_s", 0.2))
+    perf_cfg = config.get("perf", {}) or {}
+    infer_size = int(perf_cfg.get("infer_size", 0) or 0)
+
+    cameras = config.get("cameras", [])
+    if not cameras:
+        logger.error("无摄像头配置，退出。")
+        sys.exit(1)
+
+    import cv2
+    import signal
+    running = [True]
+    def _stop(*_):
+        running[0] = False
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+
+    logger.info("监控 %d 路摄像头...", len(cameras))
+    caps = {}
+    for cam in cameras:
+        src = cam.get("source", 0)
+        cap = cv2.VideoCapture(src)
+        if cap.isOpened():
+            caps[cam["id"]] = (cap, cam)
+            logger.info("摄像头 %s 已连接", cam["id"])
+        else:
+            logger.warning("摄像头 %s 无法打开: %s", cam["id"], src)
+
+    try:
+        while running[0]:
+            for cam_id, (cap, cam) in list(caps.items()):
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    continue
+                infer_frame = frame
+                if infer_size > 0:
+                    h, w = frame.shape[:2]
+                    if max(h, w) > infer_size:
+                        scale = infer_size / float(max(h, w))
+                        infer_frame = cv2.resize(frame, (int(w * scale), int(h * scale)))
+                with model_lock:
+                    results = model(infer_frame, conf=conf)[0]
+                count = len(results.boxes)
+                max_conf = float(results.boxes[0].conf) if count > 0 else 0.0
+                hit = count > 0 and max_conf >= conf
+                ts = time.time()
+                event = tracker.update(cam_id, hit, ts)
+                if event:
+                    ts_str = time.strftime("%H:%M:%S", time.localtime(ts))
+                    try:
+                        orig_img = results.orig_img
+                        annotated = results.plot()
+                        save_alarm_images(str(alarm_dir), cam_id, ts, orig_img, annotated)
+                    except Exception as exc:
+                        logger.warning("截图保存失败: %s", exc)
+                    record = {"ts": ts, "time": ts_str, "camera": cam_id,
+                              "level": "confirm", "status": "pending"}
+                    write_event(str(event_log_path), record)
+                    notifier.notify(record)
+                    logger.info("ALARM: %s @ %s conf=%.2f", cam_id, ts_str, max_conf)
+            time.sleep(interval_s)
+    finally:
+        for cap, _ in caps.values():
+            cap.release()
+        logger.info("Headless 模式已退出。")
+
+
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
+    import argparse
+    parser = argparse.ArgumentParser(description="校园多路火警监控系统")
+    parser.add_argument("--headless", action="store_true", help="无头模式（仅推理+日志+通知，无 GUI）")
+    args = parser.parse_args()
+
+    if args.headless:
+        run_headless()
+    else:
+        app = QApplication(sys.argv)
+        window = MainWindow()
+        window.show()
+        sys.exit(app.exec())
