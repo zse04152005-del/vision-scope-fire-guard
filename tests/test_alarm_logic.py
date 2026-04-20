@@ -1,6 +1,6 @@
 import time
 import unittest
-from alarm_logic import AlarmTracker
+from core.alarm_logic import AlarmTracker
 
 
 class TestAlarmTracker(unittest.TestCase):

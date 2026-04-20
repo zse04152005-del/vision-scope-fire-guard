@@ -1,5 +1,5 @@
 import unittest
-from ui_components import compute_available_grid_width
+from ui.components import compute_available_grid_width
 
 
 class TestGridAvailableWidth(unittest.TestCase):

@@ -1,4 +1,5 @@
 import time
+from collections import deque
 from threading import Lock
 from typing import Any
 
@@ -13,9 +14,10 @@ def next_inference_time(last_ts: float, interval_s: float) -> float:
 class CameraWorker(QThread):
     frame_signal = pyqtSignal(str, QImage, float, int, float)
     result_signal = pyqtSignal(str, object, float)
-    hit_signal = pyqtSignal(str, bool, float)
+    hit_signal = pyqtSignal(str, bool, float, float)  # cam_id, hit, ts, max_conf
     status_signal = pyqtSignal(str, str)
     error_signal = pyqtSignal(str, str)
+    clip_signal = pyqtSignal(str, float, object)  # cam_id, alarm_ts, frames_list
 
     def __init__(
         self,
@@ -27,6 +29,8 @@ class CameraWorker(QThread):
         interval_s: float,
         infer_size: int = 0,
         heartbeat_timeout: float = 5.0,
+        clip_pre_seconds: float = 3.0,
+        clip_post_seconds: float = 3.0,
     ):
         super().__init__()
         self.cam_id = cam_id
@@ -41,6 +45,17 @@ class CameraWorker(QThread):
         self.running = False
         self.paused = False
         self._is_local = self._check_local_source(source)
+
+        # 告警录像 ring buffer
+        buffer_size = max(30, int(clip_pre_seconds / max(0.05, interval_s)) + 5)
+        self._frame_buffer: deque = deque(maxlen=buffer_size)
+        self._clip_post_seconds = clip_post_seconds
+        self._clip_lock = Lock()
+        self._clip_recording = False
+        self._clip_alarm_ts = 0.0
+        self._clip_pre_frames: list = []
+        self._clip_post_frames: list = []
+        self._clip_post_deadline = 0.0
 
     @staticmethod
     def _check_local_source(source) -> bool:
@@ -143,8 +158,20 @@ class CameraWorker(QThread):
             self.frame_signal.emit(self.cam_id, qt_img, inference_time, count, max_conf)
             self.result_signal.emit(self.cam_id, results, inference_time)
             hit = count > 0 and max_conf >= conf
-            self.hit_signal.emit(self.cam_id, hit, now)
+            self.hit_signal.emit(self.cam_id, hit, now, max_conf)
             self.status_signal.emit(self.cam_id, "ONLINE")
+
+            # 录像 ring buffer + clip 录制
+            self._frame_buffer.append(frame.copy())
+            with self._clip_lock:
+                if self._clip_recording:
+                    self._clip_post_frames.append(frame.copy())
+                    if time.time() >= self._clip_post_deadline:
+                        all_frames = self._clip_pre_frames + self._clip_post_frames
+                        self.clip_signal.emit(self.cam_id, self._clip_alarm_ts, all_frames)
+                        self._clip_recording = False
+                        self._clip_pre_frames = []
+                        self._clip_post_frames = []
 
         cap.release()
         self.status_signal.emit(self.cam_id, "OFFLINE")
@@ -157,6 +184,15 @@ class CameraWorker(QThread):
 
     def set_paused(self, paused: bool) -> None:
         self.paused = paused
+
+    def request_clip(self, alarm_ts: float) -> None:
+        """请求保存告警前后录像片段。调用后 worker 继续录制 post 秒，完成后 emit clip_signal。"""
+        with self._clip_lock:
+            self._clip_recording = True
+            self._clip_alarm_ts = alarm_ts
+            self._clip_pre_frames = list(self._frame_buffer)
+            self._clip_post_frames = []
+            self._clip_post_deadline = time.time() + self._clip_post_seconds
 
     @staticmethod
     def convert_cv_qt(cv_img):

@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QLabel,
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QShortcut
 from ultralytics import YOLO
-from ui_components import (
+from ui.components import (
     build_grid_positions,
     build_scroll_area,
     compute_available_grid_width,
@@ -24,23 +24,26 @@ from ui_components import (
     CAM_TILE_MIN_H,
     CameraTile,
 )
-from config_loader import load_config
-from alarm_logic import AlarmTracker
-from capture_worker import CameraWorker
-from event_logger import write_event
-from alarm_saver import save_alarm_images
-from camera_manager import CameraManager
-from alert_flash import AlertFlashState
-from alert_beep import AlertBeepState
-from camera_config_utils import save_cameras
-from ui_utils import reorder_camera_order, filter_alarm_events
-from logging_setup import setup_logging
-from notifier import AlarmNotifier
-from system_monitor import SystemMonitor
-from ui_theme import build_qss, get_theme
-from ui_toast import ToastManager
-from alarm_exporter import export_alarm_events_csv
-from ui_panels import build_status_bar, build_control_tab, build_alarm_tab, build_status_tab
+from utils.config_loader import load_config
+from core.alarm_logic import AlarmTracker
+from core.capture_worker import CameraWorker
+from core.event_logger import write_event
+from core.alarm_saver import save_alarm_images
+from ui.camera_manager import CameraManager
+from core.alert_flash import AlertFlashState
+from core.alert_beep import AlertBeepState
+from utils.camera_config import save_cameras
+from ui.utils import reorder_camera_order, filter_alarm_events
+from utils.logging_setup import setup_logging
+from core.notifier import AlarmNotifier
+from core.system_monitor import SystemMonitor
+from ui.theme import build_qss, get_theme
+from ui.toast import ToastManager
+from core.alarm_exporter import export_alarm_events_csv
+from core.alarm_clip import save_clip_async
+from ui.clip_player import ClipPlayerDialog
+from core.threshold_advisor import ThresholdAdvisor
+from ui.panels import build_status_bar, build_control_tab, build_alarm_tab, build_status_tab
 
 logger = logging.getLogger(__name__)
 
@@ -397,6 +400,7 @@ class MainWindow(QMainWindow):
         existing = self.workers.get(cam_id)
         if existing and existing.isRunning():
             return
+        clip_cfg = self.config.get("clip", {}) or {}
         worker = CameraWorker(
             cam_id=cam_id,
             source=source,
@@ -406,12 +410,15 @@ class MainWindow(QMainWindow):
             interval_s=self.interval_s,
             infer_size=self.infer_size,
             heartbeat_timeout=self.heartbeat_timeout,
+            clip_pre_seconds=float(clip_cfg.get("pre_seconds", 3)),
+            clip_post_seconds=float(clip_cfg.get("post_seconds", 3)),
         )
         worker.frame_signal.connect(self.on_frame)
         worker.result_signal.connect(self.on_result)
         worker.hit_signal.connect(self.on_hit)
         worker.status_signal.connect(self.on_status)
         worker.error_signal.connect(self.on_worker_error)
+        worker.clip_signal.connect(self.on_clip_ready)
         self.workers[cam_id] = worker
         worker.start()
 
@@ -453,12 +460,17 @@ class MainWindow(QMainWindow):
                 elif item.text() != val:
                     item.setText(val)
 
-    def on_hit(self, cam_id: str, hit: bool, ts: float):
+    def on_hit(self, cam_id: str, hit: bool, ts: float, max_conf: float = 0.0):
         event = self.alarm_tracker.update(cam_id, hit, ts)
         if event:
+            event["max_conf"] = max_conf
             orig_path, ann_path = self.save_alarm_images_for(cam_id, ts)
             event["orig_path"] = orig_path
             event["annotated_path"] = ann_path
+            # 请求录像片段
+            worker = self.workers.get(cam_id)
+            if worker and worker.isRunning():
+                worker.request_clip(ts)
             self.add_alarm_event(event)
 
     def add_alarm_event(self, event: dict):
@@ -471,8 +483,10 @@ class MainWindow(QMainWindow):
             "camera": event["camera"],
             "level": event["level"],
             "status": "pending",
+            "max_conf": event.get("max_conf", 0.0),
             "orig_path": event.get("orig_path"),
             "annotated_path": event.get("annotated_path"),
+            "clip_path": None,
         }
         write_event(str(self.event_log_path), event_record)
         self.notify_event(event_record)
@@ -513,6 +527,23 @@ class MainWindow(QMainWindow):
             tile.set_status("OFFLINE", "#999")
         self.lbl_status.setText(f"{cam_id} 离线")
         logger.warning("%s 错误: %s", cam_id, msg)
+
+    def on_clip_ready(self, cam_id: str, alarm_ts: float, frames: list):
+        """Worker 采集完告警前后帧后回调 — 异步保存为 .avi 并关联到对应告警事件。"""
+        ts_str = time.strftime("%Y%m%d_%H%M%S", time.localtime(alarm_ts))
+        clip_name = f"{cam_id}_{ts_str}_clip.avi"
+        clip_path = str(self.alarm_dir / clip_name)
+        fps = max(1.0, 1.0 / self.interval_s)
+
+        def _on_saved(saved_path):
+            if not saved_path:
+                return
+            for ev in reversed(self.alarm_events):
+                if ev.get("camera") == cam_id and abs(ev.get("ts", 0) - alarm_ts) < 1.0:
+                    ev["clip_path"] = saved_path
+                    break
+
+        save_clip_async(clip_path, frames, fps=fps, callback=_on_saved)
 
     def save_alarm_images_for(self, cam_id: str, ts: float):
         results = self.latest_results.get(cam_id)
@@ -584,11 +615,12 @@ class MainWindow(QMainWindow):
         event = visible[row]
         dialog = QDialog(self)
         dialog.setWindowTitle("告警详情")
-        dialog.resize(720, 480)
+        dialog.resize(720, 520)
 
         layout = QVBoxLayout(dialog)
+        conf_str = f"  |  置信度: {event.get('max_conf', 0):.0%}" if event.get("max_conf") else ""
         info = QLabel(
-            f"时间: {event.get('time')}  |  摄像头: {event.get('camera')}  |  等级: {event.get('level')}"
+            f"时间: {event.get('time')}  |  摄像头: {event.get('camera')}  |  等级: {event.get('level')}{conf_str}"
         )
         layout.addWidget(info)
 
@@ -606,6 +638,15 @@ class MainWindow(QMainWindow):
         img_row.addWidget(orig_label)
         img_row.addWidget(ann_label)
         layout.addLayout(img_row)
+
+        # 录像回放按钮
+        clip_path = event.get("clip_path")
+        if clip_path and os.path.exists(clip_path):
+            from PyQt6.QtWidgets import QPushButton as _Btn
+            btn_clip = _Btn(f"▶ 播放告警录像 ({os.path.basename(clip_path)})")
+            btn_clip.clicked.connect(lambda: ClipPlayerDialog(clip_path, dialog).exec())
+            layout.addWidget(btn_clip)
+
         dialog.exec()
 
     def open_zoom_view(self, cam_id: str):
@@ -658,6 +699,56 @@ class MainWindow(QMainWindow):
             return
         if self.toasts:
             self.toasts.show(f"已导出 {n} 条告警至 {os.path.basename(path)}", level="success")
+
+    def open_threshold_advisor(self) -> None:
+        """打开智能阈值顾问对话框，展示每摄像头建议。"""
+        advisor = ThresholdAdvisor(self.conf_threshold)
+        suggestions = advisor.analyze(self.alarm_events, self.cameras)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("智能阈值顾问")
+        dialog.resize(520, 380)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(f"当前全局阈值: {self.conf_threshold:.0%}"))
+        layout.addWidget(QLabel(""))
+
+        table = QTableWidget()
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["摄像头", "告警数", "建议", "原因"])
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        table.setRowCount(len(suggestions))
+        for i, s in enumerate(suggestions):
+            table.setItem(i, 0, QTableWidgetItem(s["camera"]))
+            table.setItem(i, 1, QTableWidgetItem(str(s["alarm_count"])))
+            if s["suggestion"] == "raise":
+                label = f"上调至 {s['recommended']:.0%}"
+            elif s["suggestion"] == "lower":
+                label = f"下调至 {s['recommended']:.0%}"
+            else:
+                label = "保持"
+            table.setItem(i, 2, QTableWidgetItem(label))
+            table.setItem(i, 3, QTableWidgetItem(s.get("reason", "")))
+        layout.addWidget(table, stretch=1)
+
+        # 一键应用最高建议
+        best = next((s for s in suggestions if s["suggestion"] in ("raise", "lower")), None)
+        if best:
+            from PyQt6.QtWidgets import QPushButton as _Btn
+            btn_apply = _Btn(f"应用建议: 全局阈值 → {best['recommended']:.0%}")
+
+            def _apply():
+                new_val = int(best["recommended"] * 100)
+                self.conf_slider.setValue(new_val)
+                self.conf_spin.setValue(new_val)
+                self.update_conf()
+                dialog.accept()
+                if self.toasts:
+                    self.toasts.show(f"阈值已调整为 {best['recommended']:.0%}", level="success")
+
+            btn_apply.clicked.connect(_apply)
+            layout.addWidget(btn_apply)
+
+        dialog.exec()
 
     def refresh_system_stats(self) -> None:
         try:
@@ -773,7 +864,7 @@ class MainWindow(QMainWindow):
 def run_headless():
     """无头模式：仅启动推理 + 日志 + webhook，不创建 GUI。"""
     import argparse
-    from config_loader import load_config as _load
+    from utils.config_loader import load_config as _load
     config = _load(str(CONFIG_PATH))
     output_dir = BASE_DIR / config.get("output_dir", "results")
     output_dir.mkdir(parents=True, exist_ok=True)

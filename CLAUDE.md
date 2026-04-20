@@ -10,29 +10,41 @@
 **主要语言：** Python 3
 **UI 框架：** PyQt6
 **核心模型：** YOLOv8（`best.pt`，火焰/烟雾检测）
-**入口文件：** `fire_detection_system.py`
-**运行方式：** `python fire_detection_system.py`（详见 `运行说明.md`）
+**入口文件：** `main.py`
+**运行方式：** `python main.py`（详见 `运行说明.md`）
 
 ## 架构速览
 
 ```
-fire_detection_system.py        主窗口（MainWindow），协调所有模块
-├── camera_manager.py           摄像头配置对话框（CameraManager）
-├── capture_worker.py           采集+推理线程（CameraWorker, QThread）
-├── alarm_logic.py              告警状态机（AlarmTracker，命中/冷却）
-├── event_logger.py             CSV 事件落库
-├── alarm_saver.py              告警截图保存（原图+标注图）
-├── alert_flash.py              告警红框闪烁状态
-├── alert_beep.py               告警蜂鸣状态
-├── ui_panels.py                右侧标签页 + 状态栏工厂函数
-├── ui_components.py            CameraTile、网格/滚动区构造
-├── ui_utils.py                 列表重排、事件过滤等纯函数
-├── camera_config_utils.py      source 归一化、配置持久化
-├── config_loader.py            config.json 加载
-├── config.json                 运行配置（模型路径、告警阈值、摄像头列表）
+main.py                         入口文件（MainWindow），协调所有模块
+├── core/                       核心检测与告警逻辑
+│   ├── capture_worker.py       采集+推理线程（CameraWorker, QThread）
+│   ├── alarm_logic.py          告警状态机（AlarmTracker，命中/冷却）
+│   ├── alarm_saver.py          告警截图保存（原图+标注图）
+│   ├── alarm_clip.py           告警录像片段保存
+│   ├── alarm_exporter.py       告警 CSV 导出
+│   ├── alert_flash.py          告警红框闪烁状态
+│   ├── alert_beep.py           告警蜂鸣状态
+│   ├── event_logger.py         CSV 事件落库
+│   ├── notifier.py             Webhook/邮件通知
+│   ├── system_monitor.py       CPU/内存/GPU 监控
+│   └── threshold_advisor.py    智能阈值顾问
+├── ui/                         界面组件
+│   ├── components.py           CameraTile、网格/滚动区构造
+│   ├── panels.py               右侧标签页 + 状态栏工厂函数
+│   ├── theme.py                深/浅主题系统
+│   ├── toast.py                Toast 通知
+│   ├── utils.py                列表重排、事件过滤
+│   ├── clip_player.py          告警录像回放播放器
+│   └── camera_manager.py       摄像头配置对话框
+├── utils/                      配置与工具
+│   ├── config_loader.py        config.json 加载与默认值合并
+│   ├── camera_config.py        source 归一化、配置持久化
+│   └── logging_setup.py        全局日志系统
+├── config.json                 运行配置
 ├── best.pt                     YOLOv8 权重
-├── results/                    告警截图 + 事件 CSV 输出目录
-└── tests/                      单元测试（53 个）
+├── results/                    告警截图 + 事件 CSV + 录像输出
+└── tests/                      单元测试（60 个）
 ```
 
 **数据流：** 摄像头源 → `CameraWorker`（采集+推理，model_lock 保护）→ `AlarmTracker`（去抖/冷却）→ `save_alarm_images` + `write_event` + 主窗口 UI 更新（信号槽）。
@@ -48,7 +60,7 @@ fire_detection_system.py        主窗口（MainWindow），协调所有模块
 
 ```bash
 # 运行主程序
-python fire_detection_system.py
+python main.py
 
 # 跑测试
 python -m pytest tests/ -v
@@ -109,5 +121,10 @@ pip install ultralytics opencv-python PyQt6 numpy
 | 2026-04-19 | [Perf] result_table 差分更新 | 仅更新变化单元格，避免每帧清空+重建 |
 | 2026-04-19 | [Perf] plot() 跳过优化 | 无检测结果时跳过 results.plot()，减少绘图开销 |
 | 2026-04-19 | [Refactor] 主文件拆分 | 新增 `ui_panels.py`，setup_ui 中三个 Tab + 状态栏构建提取为工厂函数；主文件 1033→876 行 |
+| 2026-04-20 | [F] 告警录像回放 | 新增 `alarm_clip.py`+`clip_player.py`；worker ring buffer 缓存前后各 3s 帧，告警触发自动保存 .avi；详情弹窗内嵌播放器 |
+| 2026-04-20 | [F] 智能阈值顾问 | 新增 `threshold_advisor.py`；按频率/置信度分布分析每摄像头，建议上调/下调/保持；控制台「智能阈值顾问」按钮 + 一键应用 |
+| 2026-04-20 | hit_signal 扩展 max_conf | `CameraWorker.hit_signal` 新增第 4 参数 max_conf，alarm_events 记录置信度供顾问分析 |
+| 2026-04-20 | 新增 7 项单测 | threshold_advisor × 4、alarm_clip × 3；60/60 绿 |
+| 2026-04-20 | [Refactor] 项目目录重构 | 22 个 .py 文件按功能分入 `core/`、`ui/`、`utils/` 三个包；入口改名为 `main.py`；所有 import 路径同步更新；60/60 绿 |
 
 <!-- 后续每次变更请在此追加一行：日期 / 变更内容 / 备注 -->

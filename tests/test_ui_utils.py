@@ -1,5 +1,5 @@
 import unittest
-from ui_utils import reorder_camera_order, filter_alarm_events
+from ui.utils import reorder_camera_order, filter_alarm_events
 
 
 class TestUIUtils(unittest.TestCase):

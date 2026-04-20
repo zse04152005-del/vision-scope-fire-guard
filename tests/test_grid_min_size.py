@@ -1,6 +1,6 @@
 import unittest
 from PyQt6.QtCore import QSize
-from ui_components import compute_grid_min_size
+from ui.components import compute_grid_min_size
 
 
 class TestGridMinSize(unittest.TestCase):

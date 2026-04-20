@@ -1,7 +1,7 @@
 import os
 import tempfile
 import unittest
-from event_logger import write_event
+from core.event_logger import write_event
 
 
 class TestEventLogger(unittest.TestCase):

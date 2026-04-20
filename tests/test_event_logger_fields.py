@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-from event_logger import FIELDNAMES, write_event
+from core.event_logger import FIELDNAMES, write_event
 
 
 class TestEventLoggerFields(unittest.TestCase):

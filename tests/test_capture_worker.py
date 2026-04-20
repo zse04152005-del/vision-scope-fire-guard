@@ -1,5 +1,5 @@
 import unittest
-from capture_worker import next_inference_time
+from core.capture_worker import next_inference_time
 
 
 class TestCaptureWorker(unittest.TestCase):

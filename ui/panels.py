@@ -78,6 +78,9 @@ def build_control_tab(window, theme, theme_name: str):
     window.conf_slider.setValue(50)
     window.conf_slider.valueChanged.connect(window.update_conf)
     layout_param.addWidget(window.conf_slider)
+    window.btn_advisor = QPushButton("智能阈值顾问")
+    window.btn_advisor.clicked.connect(window.open_threshold_advisor)
+    layout_param.addWidget(window.btn_advisor)
     gb_param.setLayout(layout_param)
     layout.addWidget(gb_param)
 

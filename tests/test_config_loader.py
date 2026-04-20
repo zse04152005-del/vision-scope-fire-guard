@@ -1,5 +1,5 @@
 import unittest
-from config_loader import load_config
+from utils.config_loader import load_config
 
 
 class TestConfigLoader(unittest.TestCase):

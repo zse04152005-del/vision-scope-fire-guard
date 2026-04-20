@@ -1,5 +1,5 @@
 import unittest
-from alert_flash import AlertFlashState
+from core.alert_flash import AlertFlashState
 
 
 class TestAlertFlashState(unittest.TestCase):

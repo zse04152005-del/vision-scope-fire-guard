@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-from config_loader import DEFAULT_CONFIG, load_config
+from utils.config_loader import DEFAULT_CONFIG, load_config
 
 
 class TestConfigLoaderDefaults(unittest.TestCase):

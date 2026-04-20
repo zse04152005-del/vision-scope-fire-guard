@@ -57,7 +57,7 @@ python -m pip install pynvml
 ## 运行
 
 ```bash
-python fire_detection_system.py
+python main.py
 ```
 
 ## 配置 `config.json`
@@ -112,25 +112,32 @@ python fire_detection_system.py
 ## 项目结构
 
 ```
-fire_detection_system.py   主窗口 + 事件协调
-capture_worker.py          QThread 采集/推理（锁保护 conf_threshold）
-alarm_logic.py             告警去抖状态机
-alarm_saver.py             中文路径安全的告警截图
-alarm_exporter.py          告警 CSV 导出
-event_logger.py            CSV 事件落库
-notifier.py                DingTalk/企微 Webhook 通知
-system_monitor.py          CPU/内存/GPU 采集
-logging_setup.py           全局日志系统
-camera_manager.py          摄像头配置对话框
-camera_config_utils.py     配置归一化/持久化
-config_loader.py           配置加载（含 DEFAULT_CONFIG + deep merge）
-ui_components.py           CameraTile / 网格 / 滚动区
-ui_theme.py                主题定义 + QSS 生成
-ui_toast.py                Toast 通知组件
-ui_utils.py                通用 UI 辅助
-alert_flash.py             告警闪烁状态
-alert_beep.py              告警蜂鸣状态
-tests/                     单元测试（45 项）
+main.py                    入口文件（MainWindow + 事件协调）
+core/                      ��心检测与告警逻辑
+├── capture_worker.py      QThread 采���/推理
+├── alarm_logic.py         告警去抖状���机
+├── alarm_saver.py         告警截图保存
+├── alarm_clip.py          告警录像片段
+├── alarm_exporter.py      告警 CSV 导���
+├── alert_flash.py         告警闪烁状态
+├── alert_beep.py          告警蜂鸣状态
+├── event_logger.py        CSV 事件落库
+├── notifier.py            Webhook/邮件通知
+├── system_monitor.py      CPU/内存/GPU 监控
+└── threshold_advisor.py   智能阈值顾问
+ui/                        界面组件
+├── components.py          CameraTile / 网格 / 滚动区
+├── panels.py              右侧标签页工厂函数
+├── theme.py               主题定义 + QSS 生成
+├── toast.py               Toast 通知组件
+├── utils.py               通用 UI 辅助
+├── clip_player.py         告警录像回��播放器
+└── camera_manager.py      摄像头配置对话框
+utils/                     配置与工具
+├── config_loader.py       配置加载（DEFAULT_CONFIG + deep merge）
+├── camera_config.py       配置归一化/��久化
+└── logging_setup.py       全局日志系统
+tests/                     单元测试��60 项）
 ```
 
 ## 测试

@@ -1,6 +1,6 @@
 import unittest
 from PyQt6.QtWidgets import QApplication
-from ui_components import CameraTile
+from ui.components import CameraTile
 
 
 class TestCameraTile(unittest.TestCase):

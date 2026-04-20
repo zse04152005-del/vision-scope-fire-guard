@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-from alarm_exporter import EXPORT_FIELDS, export_alarm_events_csv
+from core.alarm_exporter import EXPORT_FIELDS, export_alarm_events_csv
 
 
 class TestAlarmExporter(unittest.TestCase):

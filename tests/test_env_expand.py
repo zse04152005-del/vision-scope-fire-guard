@@ -1,7 +1,7 @@
 import os
 import unittest
 
-from camera_config_utils import normalize_source
+from utils.camera_config import normalize_source
 
 
 class TestEnvExpand(unittest.TestCase):

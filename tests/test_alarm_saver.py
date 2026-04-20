@@ -1,7 +1,7 @@
 import os
 import time
 import unittest
-from alarm_saver import build_alarm_paths
+from core.alarm_saver import build_alarm_paths
 
 
 class TestAlarmSaver(unittest.TestCase):

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock
 
-from capture_worker import CameraWorker
+from core.capture_worker import CameraWorker
 
 
 class TestCameraWorkerPerfParams(unittest.TestCase):

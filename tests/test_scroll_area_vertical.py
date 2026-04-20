@@ -1,7 +1,7 @@
 import unittest
 from PyQt6.QtWidgets import QApplication, QLabel
 from PyQt6.QtCore import Qt
-from ui_components import build_scroll_area
+from ui.components import build_scroll_area
 
 
 class TestScrollAreaVertical(unittest.TestCase):

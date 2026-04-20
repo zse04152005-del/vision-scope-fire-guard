@@ -1,5 +1,5 @@
 import unittest
-from ui_components import compute_grid_cols
+from ui.components import compute_grid_cols
 
 
 class TestGridCols(unittest.TestCase):

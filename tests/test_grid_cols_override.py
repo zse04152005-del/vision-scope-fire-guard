@@ -1,5 +1,5 @@
 import unittest
-from ui_components import resolve_grid_cols
+from ui.components import resolve_grid_cols
 
 
 class TestGridColsOverride(unittest.TestCase):

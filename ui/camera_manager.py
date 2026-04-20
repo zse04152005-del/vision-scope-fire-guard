@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 
-from camera_config_utils import normalize_source, save_cameras
+from utils.camera_config import normalize_source, save_cameras
 
 
 class CameraManager(QDialog):

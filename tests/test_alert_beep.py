@@ -1,5 +1,5 @@
 import unittest
-from alert_beep import AlertBeepState
+from core.alert_beep import AlertBeepState
 
 
 class TestAlertBeepState(unittest.TestCase):

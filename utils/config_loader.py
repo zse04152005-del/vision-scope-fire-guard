@@ -27,6 +27,10 @@ DEFAULT_CONFIG = {
         "infer_size": 0,
         "heartbeat_timeout": 5.0,
     },
+    "clip": {
+        "pre_seconds": 3,
+        "post_seconds": 3,
+    },
     "webhook": {
         "dingtalk_url": "",
         "wecom_url": "",

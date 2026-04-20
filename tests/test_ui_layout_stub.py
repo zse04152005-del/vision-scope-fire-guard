@@ -1,5 +1,5 @@
 import unittest
-from ui_components import build_grid_positions
+from ui.components import build_grid_positions
 
 
 class TestUILayout(unittest.TestCase):

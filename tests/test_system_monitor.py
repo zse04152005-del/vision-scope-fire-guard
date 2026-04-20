@@ -1,6 +1,6 @@
 import unittest
 
-from system_monitor import SystemMonitor, SystemStats
+from core.system_monitor import SystemMonitor, SystemStats
 
 
 class TestSystemMonitor(unittest.TestCase):

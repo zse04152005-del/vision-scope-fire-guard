@@ -1,6 +1,6 @@
 import unittest
 
-from ui_theme import DARK, LIGHT, build_qss, get_theme
+from ui.theme import DARK, LIGHT, build_qss, get_theme
 
 
 class TestUiTheme(unittest.TestCase):
