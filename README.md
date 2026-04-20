@@ -113,12 +113,12 @@ python main.py
 
 ```
 main.py                    入口文件（MainWindow + 事件协调）
-core/                      ��心检测与告警逻辑
-├── capture_worker.py      QThread 采���/推理
-├── alarm_logic.py         告警去抖状���机
+core/                      核心检测与告警逻辑
+├── capture_worker.py      QThread 采集/推理
+├── alarm_logic.py         告警去抖状态机
 ├── alarm_saver.py         告警截图保存
 ├── alarm_clip.py          告警录像片段
-├── alarm_exporter.py      告警 CSV 导���
+├── alarm_exporter.py      告警 CSV 导出
 ├── alert_flash.py         告警闪烁状态
 ├── alert_beep.py          告警蜂鸣状态
 ├── event_logger.py        CSV 事件落库
@@ -131,13 +131,13 @@ ui/                        界面组件
 ├── theme.py               主题定义 + QSS 生成
 ├── toast.py               Toast 通知组件
 ├── utils.py               通用 UI 辅助
-├── clip_player.py         告警录像回��播放器
+├── clip_player.py         告警录像回放播放器
 └── camera_manager.py      摄像头配置对话框
 utils/                     配置与工具
 ├── config_loader.py       配置加载（DEFAULT_CONFIG + deep merge）
-├── camera_config.py       配置归一化/��久化
+├── camera_config.py       配置归一化/持久化
 └── logging_setup.py       全局日志系统
-tests/                     单元测试��60 项）
+tests/                     单元测试（70 项）
 ```
 
 ## 测试
