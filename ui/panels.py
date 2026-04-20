@@ -98,6 +98,10 @@ def build_control_tab(window, theme, theme_name: str):
     row_misc.addWidget(window.btn_theme)
     layout.addLayout(row_misc)
 
+    window.btn_heatmap = QPushButton("开启热力图")
+    window.btn_heatmap.clicked.connect(window.toggle_heatmap)
+    layout.addWidget(window.btn_heatmap)
+
     layout.addStretch()
     return tab
 
@@ -179,5 +183,13 @@ def build_status_tab(window, theme):
     gb_detail.setLayout(detail_layout)
     layout.addWidget(gb_detail, stretch=1)
 
-    layout.addStretch()
+    # 火焰蔓延趋势图
+    from ui.trend_chart import TrendChartWidget
+    gb_trend = QGroupBox("火焰蔓延趋势")
+    trend_layout = QVBoxLayout()
+    window.trend_chart = TrendChartWidget()
+    trend_layout.addWidget(window.trend_chart)
+    gb_trend.setLayout(trend_layout)
+    layout.addWidget(gb_trend)
+
     return tab

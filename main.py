@@ -43,7 +43,10 @@ from core.alarm_exporter import export_alarm_events_csv
 from core.alarm_clip import save_clip_async
 from ui.clip_player import ClipPlayerDialog
 from core.threshold_advisor import ThresholdAdvisor
+from core.spread_analyzer import SpreadAnalyzer, TREND_SPREADING
+from core.heatmap_accumulator import HeatmapAccumulator
 from ui.panels import build_status_bar, build_control_tab, build_alarm_tab, build_status_tab
+from ui.trend_chart import TrendChartWidget
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +145,9 @@ class MainWindow(QMainWindow):
         self.zoom_dialog = None
         self.zoom_label = None
         self.zoom_cam_id = None
+        self.spread_analyzer = SpreadAnalyzer(window_size=20)
+        self.heatmap_acc = HeatmapAccumulator()
+        self.heatmap_enabled = False
         self.filtered_alarm_events = []
 
         self.setup_ui()
@@ -425,6 +431,9 @@ class MainWindow(QMainWindow):
     def on_frame(self, cam_id: str, qt_img: QImage, inference_time: float, count: int, max_conf: float):
         tile = self.tile_by_id.get(cam_id)
         if tile:
+            # 热力图叠加
+            if self.heatmap_enabled:
+                qt_img = self._apply_heatmap_overlay(cam_id, qt_img)
             tile.set_frame(qt_img)
             fps = 0 if inference_time <= 0 else int(1.0 / inference_time)
             tile.meta_label.setText(f"FPS: {fps}  |  目标: {count}")
@@ -440,6 +449,36 @@ class MainWindow(QMainWindow):
         self.latest_results[cam_id] = results
         if cam_id == self.primary_cam_id:
             self.update_primary_details(results, inference_time)
+
+        # 蔓延趋势分析 + 热力图累积
+        if len(results.boxes) > 0:
+            h, w = results.orig_img.shape[:2] if results.orig_img is not None else (480, 640)
+            ts = time.time()
+            trend = self.spread_analyzer.update(cam_id, results.boxes, w, h, ts)
+            self.heatmap_acc.update(cam_id, results.boxes, w, h)
+
+            # 蔓延告警升级
+            if trend == TREND_SPREADING:
+                event = self.alarm_tracker.update(cam_id, True, ts)
+                if event:
+                    event["level"] = "spreading"
+                    event["max_conf"] = float(results.boxes[0].conf)
+                    orig_path, ann_path = self.save_alarm_images_for(cam_id, ts)
+                    event["orig_path"] = orig_path
+                    event["annotated_path"] = ann_path
+                    worker = self.workers.get(cam_id)
+                    if worker and worker.isRunning():
+                        worker.request_clip(ts)
+                    self.add_alarm_event(event)
+
+            # 更新趋势图
+            if cam_id == self.primary_cam_id and hasattr(self, "trend_chart"):
+                chart_data = self.spread_analyzer.get_chart_data(cam_id)
+                self.trend_chart.set_data(chart_data, trend, cam_id)
+        else:
+            # 无检测时也更新分析器（面积=0）
+            h, w = results.orig_img.shape[:2] if results.orig_img is not None else (480, 640)
+            self.spread_analyzer.update(cam_id, [], w, h, time.time())
 
     def update_primary_details(self, results, inference_time: float):
         new_count = len(results.boxes)
@@ -800,6 +839,41 @@ class MainWindow(QMainWindow):
             self.beep_timer.stop()
         self.main_widget.setStyleSheet("border: 4px solid transparent;")
         self.lbl_status.setText("告警已消音")
+
+    def toggle_heatmap(self):
+        self.heatmap_enabled = not self.heatmap_enabled
+        label = "关闭热力图" if self.heatmap_enabled else "开启热力图"
+        if hasattr(self, "btn_heatmap"):
+            self.btn_heatmap.setText(label)
+        if self.toasts:
+            self.toasts.show(f"热力图已{'开启' if self.heatmap_enabled else '关闭'}", level="info")
+
+    def _apply_heatmap_overlay(self, cam_id: str, qt_img: QImage) -> QImage:
+        """将热力图半透明叠加到帧上。"""
+        try:
+            import cv2
+            import numpy as np
+
+            # QImage → numpy
+            w, h = qt_img.width(), qt_img.height()
+            overlay = self.heatmap_acc.get_overlay(cam_id, w, h)
+            if overlay is None:
+                return qt_img
+
+            # 将 QImage 转为 numpy array
+            ptr = qt_img.bits()
+            ptr.setsize(h * w * 3)
+            frame = np.array(ptr).reshape(h, w, 3).copy()  # RGB
+
+            # overlay 是 BGR，转为 RGB
+            overlay_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+
+            # alpha 混合 (0.6 原图 + 0.4 热力图)
+            blended = cv2.addWeighted(frame, 0.6, overlay_rgb, 0.4, 0)
+
+            return QImage(blended.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
+        except Exception:
+            return qt_img
 
     # ============ 修复后的截图功能 ============
     def save_screenshot(self):

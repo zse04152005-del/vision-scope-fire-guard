@@ -126,5 +126,8 @@ pip install ultralytics opencv-python PyQt6 numpy
 | 2026-04-20 | hit_signal 扩展 max_conf | `CameraWorker.hit_signal` 新增第 4 参数 max_conf，alarm_events 记录置信度供顾问分析 |
 | 2026-04-20 | 新增 7 项单测 | threshold_advisor × 4、alarm_clip × 3；60/60 绿 |
 | 2026-04-20 | [Refactor] 项目目录重构 | 22 个 .py 文件按功能分入 `core/`、`ui/`、`utils/` 三个包；入口改名为 `main.py`；所有 import 路径同步更新；60/60 绿 |
+| 2026-04-20 | [F] 火焰蔓延趋势分析 | 新增 `core/spread_analyzer.py` + `ui/trend_chart.py`；追踪 bbox 面积变化，stable/growing/spreading 三级判定；系统状态 tab 实时曲线图；spreading 自动升级告警 |
+| 2026-04-20 | [F] 告警热力图 | 新增 `core/heatmap_accumulator.py`；持续累积检测区域生成密度图，开启后半透明叠加到实时画面；控制台「开启热力图」按钮切换 |
+| 2026-04-20 | 新增 10 项单测 | spread_analyzer × 5、heatmap × 5；70/70 绿 |
 
 <!-- 后续每次变更请在此追加一行：日期 / 变更内容 / 备注 -->
