@@ -31,6 +31,7 @@ class CameraWorker(QThread):
         heartbeat_timeout: float = 5.0,
         clip_pre_seconds: float = 3.0,
         clip_post_seconds: float = 3.0,
+        low_light_enhance: bool = False,
     ):
         super().__init__()
         self.cam_id = cam_id
@@ -44,6 +45,7 @@ class CameraWorker(QThread):
         self.heartbeat_timeout = float(heartbeat_timeout) if heartbeat_timeout else 0.0
         self.running = False
         self.paused = False
+        self.low_light_enhance = low_light_enhance
         self._is_local = self._check_local_source(source)
 
         # 告警录像 ring buffer
@@ -134,6 +136,12 @@ class CameraWorker(QThread):
 
             last_infer = now
             conf = self.conf_threshold
+
+            # 低光增强预处理
+            if self.low_light_enhance:
+                from core.image_enhance import auto_enhance
+                frame = auto_enhance(frame)
+
             infer_frame = frame
             if self.infer_size and self.infer_size > 0:
                 h, w = frame.shape[:2]

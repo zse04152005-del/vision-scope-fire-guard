@@ -127,6 +127,12 @@ def build_alarm_tab(window):
     filter_row.addWidget(window.btn_export)
     layout.addLayout(filter_row)
 
+    # 历史时间轴
+    from ui.timeline_widget import TimelineWidget
+    window.timeline = TimelineWidget()
+    window.timeline.alarm_clicked.connect(window.on_timeline_click)
+    layout.addWidget(window.timeline)
+
     window.alarm_table = QTableWidget()
     window.alarm_table.setColumnCount(4)
     window.alarm_table.setHorizontalHeaderLabels(["时间", "摄像头", "等级", "状态"])

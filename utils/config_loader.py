@@ -31,6 +31,10 @@ DEFAULT_CONFIG = {
         "pre_seconds": 3,
         "post_seconds": 3,
     },
+    "enhance": {
+        "low_light": False,
+        "brightness_threshold": 60,
+    },
     "webhook": {
         "dingtalk_url": "",
         "wecom_url": "",

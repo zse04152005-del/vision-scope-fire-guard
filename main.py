@@ -407,6 +407,7 @@ class MainWindow(QMainWindow):
         if existing and existing.isRunning():
             return
         clip_cfg = self.config.get("clip", {}) or {}
+        enhance_cfg = self.config.get("enhance", {}) or {}
         worker = CameraWorker(
             cam_id=cam_id,
             source=source,
@@ -418,6 +419,7 @@ class MainWindow(QMainWindow):
             heartbeat_timeout=self.heartbeat_timeout,
             clip_pre_seconds=float(clip_cfg.get("pre_seconds", 3)),
             clip_post_seconds=float(clip_cfg.get("post_seconds", 3)),
+            low_light_enhance=bool(enhance_cfg.get("low_light", False)),
         )
         worker.frame_signal.connect(self.on_frame)
         worker.result_signal.connect(self.on_result)
@@ -618,6 +620,22 @@ class MainWindow(QMainWindow):
                     if item:
                         item.setBackground(Qt.GlobalColor.red)
                         item.setForeground(Qt.GlobalColor.white)
+        # 同步时间轴组件
+        if hasattr(self, "timeline"):
+            self.timeline.set_events(self.filtered_alarm_events)
+
+    def on_timeline_click(self, index: int):
+        """时间轴标记被点击，打开对应告警详情。"""
+        if index < 0 or index >= len(self.filtered_alarm_events):
+            return
+        event = self.filtered_alarm_events[index]
+        # 找到在 visible 表中的行号并调用详情
+        visible = self.filtered_alarm_events[-self.ALARM_TABLE_MAX_ROWS:]
+        try:
+            row = visible.index(event)
+        except ValueError:
+            row = 0
+        self.open_alarm_detail(row, 0)
 
     def refresh_alarm_stats(self):
         total = len(self.alarm_events)
