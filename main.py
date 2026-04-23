@@ -45,6 +45,7 @@ from ui.clip_player import ClipPlayerDialog
 from core.threshold_advisor import ThresholdAdvisor
 from core.spread_analyzer import SpreadAnalyzer, TREND_SPREADING
 from core.heatmap_accumulator import HeatmapAccumulator
+from core.roi_manager import ROIManager
 from ui.panels import build_status_bar, build_control_tab, build_alarm_tab, build_status_tab
 from ui.trend_chart import TrendChartWidget
 
@@ -149,6 +150,11 @@ class MainWindow(QMainWindow):
         self.heatmap_acc = HeatmapAccumulator()
         self.heatmap_enabled = False
         self.filtered_alarm_events = []
+        roi_path = str(BASE_DIR / "roi_config.json")
+        self.roi_manager = ROIManager(config_path=roi_path)
+        self.campus_map_dialog = None
+        self._map_bg_path = str(BASE_DIR / "campus_map.png")
+        self._map_layout_path = str(BASE_DIR / "map_layout.json")
 
         self.setup_ui()
         self.setup_styles()
@@ -502,6 +508,15 @@ class MainWindow(QMainWindow):
                     item.setText(val)
 
     def on_hit(self, cam_id: str, hit: bool, ts: float, max_conf: float = 0.0):
+        # ROI 过滤：仅 ROI 内的检测才触发告警
+        if hit and self.roi_manager.has_roi(cam_id):
+            results = self.latest_results.get(cam_id)
+            if results is not None and len(results.boxes) > 0:
+                h, w = results.orig_img.shape[:2] if results.orig_img is not None else (480, 640)
+                kept = self.roi_manager.filter_boxes(cam_id, results.boxes, w, h)
+                if not kept:
+                    hit = False
+                    max_conf = 0.0
         event = self.alarm_tracker.update(cam_id, hit, ts)
         if event:
             event["max_conf"] = max_conf
@@ -540,6 +555,9 @@ class MainWindow(QMainWindow):
         self.right_tabs.setCurrentIndex(1)
         self.trigger_alert_visual()
         self.highlight_camera(event["camera"])
+        # 更新校园地图告警
+        if self.campus_map_dialog and self.campus_map_dialog.isVisible():
+            self.campus_map_dialog.map_widget.trigger_alert(event["camera"])
 
     def on_status(self, cam_id: str, status: str):
         tile = self.tile_by_id.get(cam_id)
@@ -558,6 +576,9 @@ class MainWindow(QMainWindow):
         else:
             self.online_cams.discard(cam_id)
         self.update_online_label()
+        # 同步校园地图状态
+        if self.campus_map_dialog and self.campus_map_dialog.isVisible():
+            self.campus_map_dialog.map_widget.update_status(cam_id, status)
 
     def update_online_label(self):
         self.lbl_online.setText(f"在线: {len(self.online_cams)}/{len(self.cameras)}")
@@ -865,6 +886,28 @@ class MainWindow(QMainWindow):
             self.btn_heatmap.setText(label)
         if self.toasts:
             self.toasts.show(f"热力图已{'开启' if self.heatmap_enabled else '关闭'}", level="info")
+
+    def open_roi_editor(self):
+        from ui.roi_editor import ROIEditorDialog
+        dialog = ROIEditorDialog(self.roi_manager, self.cameras, self.tile_by_id, parent=self)
+        dialog.exec()
+
+    def open_campus_map(self):
+        from ui.campus_map import CampusMapDialog
+        if self.campus_map_dialog and self.campus_map_dialog.isVisible():
+            self.campus_map_dialog.raise_()
+            self.campus_map_dialog.activateWindow()
+            return
+        self.campus_map_dialog = CampusMapDialog(
+            cameras=self.cameras,
+            tile_by_id=self.tile_by_id,
+            map_bg_path=self._map_bg_path,
+            layout_path=self._map_layout_path,
+            parent=self,
+        )
+        self.campus_map_dialog.map_widget.camera_clicked.connect(self.open_zoom_view)
+        self.campus_map_dialog.setModal(False)
+        self.campus_map_dialog.show()
 
     def _apply_heatmap_overlay(self, cam_id: str, qt_img: QImage) -> QImage:
         """将热力图半透明叠加到帧上。"""

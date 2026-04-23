@@ -102,6 +102,14 @@ def build_control_tab(window, theme, theme_name: str):
     window.btn_heatmap.clicked.connect(window.toggle_heatmap)
     layout.addWidget(window.btn_heatmap)
 
+    window.btn_roi = QPushButton("ROI 关注区域")
+    window.btn_roi.clicked.connect(window.open_roi_editor)
+    layout.addWidget(window.btn_roi)
+
+    window.btn_campus_map = QPushButton("校园火情态势图")
+    window.btn_campus_map.clicked.connect(window.open_campus_map)
+    layout.addWidget(window.btn_campus_map)
+
     layout.addStretch()
     return tab
 
