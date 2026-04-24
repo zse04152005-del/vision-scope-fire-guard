@@ -6,3 +6,5 @@ psutil>=5.9.0
 requests>=2.31.0
 # 可选：NVIDIA GPU 监控
 # pynvml>=11.0.0
+# 可选：打包为独立程序
+# pyinstaller>=6.0.0

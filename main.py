@@ -163,10 +163,7 @@ class MainWindow(QMainWindow):
         if self._no_cameras_configured:
             self.btn_open_cam.setEnabled(False)
             self.lbl_status.setText("未配置摄像头，请点击「摄像头管理」添加")
-            QTimer.singleShot(500, lambda: QMessageBox.information(
-                self, "首次运行",
-                "当前未配置摄像头。\n请点击右侧「⚙ 摄像头管理」添加摄像头后重启。"
-            ))
+            QTimer.singleShot(500, self._show_setup_wizard)
 
         self.sys_timer = QTimer(self)
         self.sys_timer.setInterval(2000)
@@ -756,6 +753,18 @@ class MainWindow(QMainWindow):
         self.camera_manager = CameraManager(self, str(CONFIG_PATH), self.cameras)
         self.camera_manager.setModal(False)
         self.camera_manager.show()
+
+    def _show_setup_wizard(self):
+        from ui.setup_wizard import SetupWizard
+        wizard = SetupWizard(config_path=str(CONFIG_PATH), parent=self)
+        if wizard.exec():
+            cameras = wizard.get_cameras()
+            if cameras:
+                self.load_cameras_from_manager(cameras)
+                QMessageBox.information(
+                    self, "设置完成",
+                    f"已配置 {len(cameras)} 个摄像头。\n请重启程序以加载新配置。"
+                )
 
     def load_cameras_from_manager(self, cameras: list[dict]) -> None:
         self.cameras = cameras
