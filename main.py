@@ -46,6 +46,7 @@ from core.threshold_advisor import ThresholdAdvisor
 from core.spread_analyzer import SpreadAnalyzer, TREND_SPREADING
 from core.heatmap_accumulator import HeatmapAccumulator
 from core.roi_manager import ROIManager
+from core.alarm_db import AlarmDB
 from ui.panels import build_status_bar, build_control_tab, build_alarm_tab, build_status_tab
 from ui.trend_chart import TrendChartWidget
 
@@ -118,12 +119,15 @@ class MainWindow(QMainWindow):
             raise SystemExit(1)
         self.model_lock = Lock()
         self.alarm_tracker = AlarmTracker(self.hit_threshold, self.cooldown_seconds)
+        self.alarm_db = AlarmDB(str(self.output_dir / "alarms.db"))
         self.alert_count = 0
         self.workers = {}
         self.online_cams = set()
         self.paused = False
         self.latest_results = {}
-        self.alarm_events = []
+        # 从数据库加载今天的历史告警
+        self.alarm_events = self.alarm_db.load_today()
+        self.alert_count = len(self.alarm_events)
         self.camera_manager = None
         self.alert_timer = QTimer(self)
         self.alert_timer.setInterval(300)
@@ -159,6 +163,12 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.setup_styles()
         self.toasts = ToastManager(self)
+
+        # 从数据库恢复历史告警到 UI
+        if self.alarm_events:
+            self.lbl_alerts.setText(f"今日告警: {self.alert_count}")
+            self.refresh_alarm_table()
+            self.refresh_alarm_stats()
 
         if self._no_cameras_configured:
             self.btn_open_cam.setEnabled(False)
@@ -542,6 +552,7 @@ class MainWindow(QMainWindow):
             "clip_path": None,
         }
         write_event(str(self.event_log_path), event_record)
+        self.alarm_db.insert(event_record)
         self.notify_event(event_record)
         self.alarm_events.append(event_record)
         if len(self.alarm_events) > self.MAX_ALARM_EVENTS:
@@ -601,6 +612,7 @@ class MainWindow(QMainWindow):
                 if ev.get("camera") == cam_id and abs(ev.get("ts", 0) - alarm_ts) < 1.0:
                     ev["clip_path"] = saved_path
                     break
+            self.alarm_db.update_clip_path(alarm_ts, cam_id, saved_path)
 
         save_clip_async(clip_path, frames, fps=fps, callback=_on_saved)
 
@@ -1003,6 +1015,8 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.stop_all(clear_tables=False)
+        if hasattr(self, "alarm_db"):
+            self.alarm_db.close()
         event.accept()
 
 def run_headless():

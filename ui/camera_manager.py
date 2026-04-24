@@ -197,7 +197,27 @@ class CameraManager(QDialog):
 
         add_tabs.addTab(tab_rtsp, "网络摄像头 (RTSP)")
 
-        # Tab 3: 视频文件
+        # Tab 3: 局域网扫描
+        tab_scan = QWidget()
+        scan_layout = QVBoxLayout(tab_scan)
+        scan_layout.setContentsMargins(8, 8, 8, 8)
+
+        scan_top = QHBoxLayout()
+        self.btn_net_scan = QPushButton("扫描局域网设备")
+        self.btn_net_scan.clicked.connect(self._scan_network)
+        self.lbl_net_scan = QLabel("扫描本网段中开放摄像头端口 (554/8554/80) 的设备")
+        self.lbl_net_scan.setStyleSheet("color: #9ca3af; font-size: 11px;")
+        scan_top.addWidget(self.btn_net_scan)
+        scan_top.addWidget(self.lbl_net_scan, stretch=1)
+        scan_layout.addLayout(scan_top)
+
+        self._net_device_layout = QVBoxLayout()
+        self._net_device_buttons: list[QWidget] = []
+        scan_layout.addLayout(self._net_device_layout)
+        scan_layout.addStretch()
+        add_tabs.addTab(tab_scan, "局域网扫描")
+
+        # Tab 4: 视频文件
         tab_file = QWidget()
         file_layout = QHBoxLayout(tab_file)
         file_layout.setContentsMargins(8, 8, 8, 8)
@@ -386,6 +406,69 @@ class CameraManager(QDialog):
         self.rtsp_user.clear()
         self.rtsp_pass.clear()
         self.rtsp_host.clear()
+
+    # ---------- 局域网扫描 ----------
+
+    def _scan_network(self):
+        self.btn_net_scan.setEnabled(False)
+        self.lbl_net_scan.setText("正在扫描局域网（约 10~30 秒）...")
+        # 清除旧结果
+        for w in self._net_device_buttons:
+            w.deleteLater()
+        self._net_device_buttons.clear()
+
+        def _run():
+            from core.network_scanner import scan_subnet, get_local_ip
+            local_ip = get_local_ip()
+            found = scan_subnet(timeout=0.3, max_workers=80)
+            QTimer.singleShot(0, lambda: self._on_net_scan_done(found, local_ip))
+
+        Thread(target=_run, daemon=True).start()
+
+    def _on_net_scan_done(self, found: list[dict], local_ip: str):
+        self.btn_net_scan.setEnabled(True)
+        if not found:
+            self.lbl_net_scan.setText(
+                f"未发现局域网摄像头设备（本机 IP: {local_ip or '未知'}）"
+            )
+            return
+        self.lbl_net_scan.setText(
+            f"发现 {len(found)} 个设备（本机: {local_ip}），点击添加:"
+        )
+        for dev in found:
+            ip = dev["ip"]
+            hostname = dev.get("hostname", "")
+            ports = dev.get("ports", [])
+            urls = dev.get("urls", [])
+            port_str = ", ".join(str(p) for p in ports)
+            label_text = f"{ip}  (端口: {port_str})"
+            if hostname:
+                label_text = f"{ip} [{hostname}]  (端口: {port_str})"
+
+            row_widget = QWidget()
+            row_lay = QHBoxLayout(row_widget)
+            row_lay.setContentsMargins(0, 2, 0, 2)
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet("font-size: 11px;")
+            row_lay.addWidget(lbl, stretch=1)
+
+            for url in urls:
+                btn = QPushButton(f"添加 {url.split('://')[0]}")
+                btn.setFixedWidth(100)
+                btn.clicked.connect(
+                    lambda checked, u=url, h=hostname, i=ip: self._add_net_device(i, h, u)
+                )
+                row_lay.addWidget(btn)
+
+            self._net_device_layout.addWidget(row_widget)
+            self._net_device_buttons.append(row_widget)
+
+    def _add_net_device(self, ip: str, hostname: str, url: str):
+        name = hostname if hostname else ip
+        row = self.table.rowCount()
+        cam_id = f"cam{row + 1:02d}"
+        self._insert_camera({"id": cam_id, "name": name, "source": url})
+        self._update_count()
 
     # ---------- 视频文件 ----------
 
