@@ -126,7 +126,7 @@ class CameraManager(QDialog):
 
         # ============ 顶部：快速添加区 ============
         add_tabs = QTabWidget()
-        add_tabs.setMaximumHeight(200)
+        add_tabs.setMaximumHeight(260)
 
         # Tab 1: 本地摄像头
         tab_local = QWidget()
@@ -184,7 +184,9 @@ class CameraManager(QDialog):
         self.lbl_rtsp_preview.setStyleSheet("color: #6b7280; font-size: 11px;")
         rtsp_btn_row.addWidget(self.lbl_rtsp_preview, stretch=1)
         btn_rtsp_add = QPushButton("添加到列表")
-        btn_rtsp_add.setStyleSheet("background-color: #2563eb; color: white; font-weight: bold;")
+        btn_rtsp_add.setFixedHeight(36)
+        btn_rtsp_add.setMinimumWidth(120)
+        btn_rtsp_add.setStyleSheet("background-color: #2563eb; color: white; font-weight: bold; padding: 4px 16px;")
         btn_rtsp_add.clicked.connect(self._add_rtsp_camera)
         rtsp_btn_row.addWidget(btn_rtsp_add)
         rtsp_layout.addLayout(rtsp_btn_row, 4, 0, 1, 4)
