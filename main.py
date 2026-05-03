@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
         self.heatmap_acc = HeatmapAccumulator()
         self.heatmap_enabled = False
         self.filtered_alarm_events = []
+        self._viewing_date = time.strftime("%Y-%m-%d")  # 当前查看的日期
         roi_path = str(BASE_DIR / "roi_config.json")
         self.roi_manager = ROIManager(config_path=roi_path)
         self.campus_map_dialog = None
@@ -538,7 +539,6 @@ class MainWindow(QMainWindow):
 
     def add_alarm_event(self, event: dict):
         self.alert_count += 1
-        self.lbl_alerts.setText(f"今日告警: {self.alert_count}")
         ts_str = time.strftime("%H:%M:%S", time.localtime(event["ts"]))
         event_record = {
             "ts": event["ts"],
@@ -554,13 +554,22 @@ class MainWindow(QMainWindow):
         write_event(str(self.event_log_path), event_record)
         self.alarm_db.insert(event_record)
         self.notify_event(event_record)
-        self.alarm_events.append(event_record)
-        if len(self.alarm_events) > self.MAX_ALARM_EVENTS:
-            self.alarm_events = self.alarm_events[-self.MAX_ALARM_EVENTS:]
-        self.refresh_alarm_table()
-        self.refresh_alarm_stats()
-        self.alarm_table.scrollToBottom()
-        self.right_tabs.setCurrentIndex(1)
+
+        # 状态栏始终显示今日告警数
+        today_count = self.alarm_db.count_today()
+        self.lbl_alerts.setText(f"今日告警: {today_count}")
+
+        # 仅在查看今日时才追加到当前视图
+        is_viewing_today = (self._viewing_date == time.strftime("%Y-%m-%d"))
+        if is_viewing_today:
+            self.alarm_events.append(event_record)
+            if len(self.alarm_events) > self.MAX_ALARM_EVENTS:
+                self.alarm_events = self.alarm_events[-self.MAX_ALARM_EVENTS:]
+            self.refresh_alarm_table()
+            self.refresh_alarm_stats()
+            self.alarm_table.scrollToBottom()
+            self.right_tabs.setCurrentIndex(1)
+
         self.trigger_alert_visual()
         self.highlight_camera(event["camera"])
         # 更新校园地图告警
@@ -601,7 +610,7 @@ class MainWindow(QMainWindow):
     def on_clip_ready(self, cam_id: str, alarm_ts: float, frames: list):
         """Worker 采集完告警前后帧后回调 — 异步保存为 .avi 并关联到对应告警事件。"""
         ts_str = time.strftime("%Y%m%d_%H%M%S", time.localtime(alarm_ts))
-        clip_name = f"{cam_id}_{ts_str}_clip.avi"
+        clip_name = f"{cam_id}_{ts_str}_clip.mp4"
         clip_path = str(self.alarm_dir / clip_name)
         fps = max(1.0, 1.0 / self.interval_s)
 
@@ -669,7 +678,10 @@ class MainWindow(QMainWindow):
 
     def refresh_alarm_stats(self):
         total = len(self.alarm_events)
-        self.lbl_alarm_total.setText(f"今日总计: {total}")
+        today = time.strftime("%Y-%m-%d")
+        is_today = (self._viewing_date == today)
+        date_label = "今日" if is_today else self._viewing_date
+        self.lbl_alarm_total.setText(f"{date_label}总计: {total}")
         if total == 0:
             self.lbl_alarm_top_cam.setText("最频繁: -")
             self.lbl_alarm_avg_conf.setText("平均置信度: -")
@@ -680,6 +692,88 @@ class MainWindow(QMainWindow):
             cam_counts[cam] = cam_counts.get(cam, 0) + 1
         top_cam = max(cam_counts, key=cam_counts.get)
         self.lbl_alarm_top_cam.setText(f"最频繁: {top_cam} ({cam_counts[top_cam]}次)")
+
+    # ---------- 日期选择 ----------
+
+    def open_date_picker(self):
+        """打开日历弹窗，有告警记录的日期高亮显示。"""
+        from PyQt6.QtWidgets import QCalendarWidget, QDialog, QVBoxLayout, QLabel
+        from PyQt6.QtGui import QTextCharFormat, QColor
+        from PyQt6.QtCore import QDate, Qt as QtConst
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择日期")
+        dialog.resize(380, 340)
+        layout = QVBoxLayout(dialog)
+
+        cal = QCalendarWidget()
+
+        # 1) 先把周六周日的默认红色去掉，统一为普通样式
+        fmt_normal = QTextCharFormat()
+        fmt_normal.setForeground(QColor("#d1d5db"))
+        cal.setWeekdayTextFormat(QtConst.DayOfWeek.Saturday, fmt_normal)
+        cal.setWeekdayTextFormat(QtConst.DayOfWeek.Sunday, fmt_normal)
+
+        # 设置当前选中日期
+        parts = self._viewing_date.split("-")
+        cal.setSelectedDate(QDate(int(parts[0]), int(parts[1]), int(parts[2])))
+
+        # 2) 高亮有告警记录的日期：橙红色圆角背景
+        date_list = self.alarm_db.get_date_list()
+        fmt_has_alarm = QTextCharFormat()
+        fmt_has_alarm.setBackground(QColor("#ea580c"))
+        fmt_has_alarm.setForeground(QColor("#ffffff"))
+        fmt_has_alarm.setFontWeight(700)
+        for date_str in date_list:
+            dp = date_str.split("-")
+            if len(dp) == 3:
+                cal.setDateTextFormat(
+                    QDate(int(dp[0]), int(dp[1]), int(dp[2])),
+                    fmt_has_alarm,
+                )
+
+        # 不能选择未来日期
+        cal.setMaximumDate(QDate.currentDate())
+
+        # 底部图例说明
+        legend = QLabel("  ■ 橙色 = 有告警记录的日期")
+        legend.setStyleSheet("color: #ea580c; font-size: 11px; margin-top: 4px;")
+
+        def on_date_clicked(qdate: QDate):
+            self._switch_alarm_date(qdate.toString("yyyy-MM-dd"))
+            dialog.accept()
+
+        cal.clicked.connect(on_date_clicked)
+        layout.addWidget(cal)
+        layout.addWidget(legend)
+        dialog.exec()
+
+    def _switch_alarm_date(self, date_str: str):
+        """切换告警中心显示的日期。"""
+        self._viewing_date = date_str
+        self.alarm_events = self.alarm_db.load_by_date(date_str)
+        self.alert_count = len(self.alarm_events)
+
+        today = time.strftime("%Y-%m-%d")
+        is_today = (date_str == today)
+
+        self.btn_pick_date.setText("今日" if is_today else date_str)
+        self.btn_back_today.setVisible(not is_today)
+        if not is_today:
+            self.lbl_date_hint.setText(f"共 {len(self.alarm_events)} 条记录")
+        else:
+            self.lbl_date_hint.setText("")
+
+        self.lbl_alerts.setText(
+            f"今日告警: {self.alarm_db.count_today()}" if is_today
+            else f"{date_str}: {len(self.alarm_events)} 条"
+        )
+        self.refresh_alarm_table()
+        self.refresh_alarm_stats()
+
+    def switch_to_today(self):
+        """返回查看今日告警。"""
+        self._switch_alarm_date(time.strftime("%Y-%m-%d"))
 
     def highlight_camera(self, cam_id: str):
         tile = self.tile_by_id.get(cam_id)
@@ -806,10 +900,27 @@ class MainWindow(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("智能阈值顾问")
-        dialog.resize(520, 380)
+        dialog.resize(520, 420)
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel(f"当前全局阈值: {self.conf_threshold:.0%}"))
-        layout.addWidget(QLabel(""))
+
+        # 计算推荐值：优先取有调整建议的，否则用当前值
+        adjustments = [s for s in suggestions if s["suggestion"] in ("raise", "lower")]
+        if adjustments:
+            recommended = sum(s["recommended"] for s in adjustments) / len(adjustments)
+            recommended = round(recommended, 2)
+            summary = f"基于 {len(adjustments)} 个摄像头的分析，建议将全局阈值调整为 {recommended:.0%}"
+        elif not self.alarm_events:
+            recommended = max(0.30, self.conf_threshold - 0.05)
+            summary = "暂无告警记录，建议适当降低阈值以提高检测灵敏度"
+        else:
+            recommended = self.conf_threshold
+            summary = "各摄像头告警频率正常，当前阈值适中"
+
+        lbl_summary = QLabel(summary)
+        lbl_summary.setWordWrap(True)
+        lbl_summary.setStyleSheet("color: #f59e0b; font-size: 12px; margin: 4px 0;")
+        layout.addWidget(lbl_summary)
 
         table = QTableWidget()
         table.setColumnCount(4)
@@ -824,28 +935,36 @@ class MainWindow(QMainWindow):
             elif s["suggestion"] == "lower":
                 label = f"下调至 {s['recommended']:.0%}"
             else:
-                label = "保持"
+                label = "保持当前"
             table.setItem(i, 2, QTableWidgetItem(label))
             table.setItem(i, 3, QTableWidgetItem(s.get("reason", "")))
         layout.addWidget(table, stretch=1)
 
-        # 一键应用最高建议
-        best = next((s for s in suggestions if s["suggestion"] in ("raise", "lower")), None)
-        if best:
-            from PyQt6.QtWidgets import QPushButton as _Btn
-            btn_apply = _Btn(f"应用建议: 全局阈值 → {best['recommended']:.0%}")
+        # 一键应用按钮 — 始终显示
+        from PyQt6.QtWidgets import QPushButton as _Btn
+        rec_pct = int(recommended * 100)
+        cur_pct = int(self.conf_threshold * 100)
+        if rec_pct != cur_pct:
+            btn_apply = _Btn(f"一键应用: 全局阈值 {cur_pct}% → {rec_pct}%")
+            btn_apply.setStyleSheet(
+                "background-color: #2563eb; color: white; font-weight: bold; "
+                "padding: 8px; font-size: 13px;"
+            )
+        else:
+            btn_apply = _Btn(f"当前阈值 {cur_pct}% 已是推荐值，无需调整")
+            btn_apply.setStyleSheet("padding: 8px; font-size: 13px;")
+            btn_apply.setEnabled(False)
 
-            def _apply():
-                new_val = int(best["recommended"] * 100)
-                self.conf_slider.setValue(new_val)
-                self.conf_spin.setValue(new_val)
-                self.update_conf()
-                dialog.accept()
-                if self.toasts:
-                    self.toasts.show(f"阈值已调整为 {best['recommended']:.0%}", level="success")
+        def _apply():
+            self.conf_slider.setValue(rec_pct)
+            self.conf_spin.setValue(rec_pct)
+            self.update_conf()
+            dialog.accept()
+            if self.toasts:
+                self.toasts.show(f"阈值已调整为 {rec_pct}%", level="success")
 
-            btn_apply.clicked.connect(_apply)
-            layout.addWidget(btn_apply)
+        btn_apply.clicked.connect(_apply)
+        layout.addWidget(btn_apply)
 
         dialog.exec()
 

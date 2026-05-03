@@ -13,10 +13,10 @@ def save_clip(output_path: str, frames: list, fps: float = 5.0):
     try:
         import cv2
 
-        if not output_path.lower().endswith(".avi"):
-            output_path = output_path.rsplit(".", 1)[0] + ".avi"
+        if not output_path.lower().endswith(".mp4"):
+            output_path = output_path.rsplit(".", 1)[0] + ".mp4"
         h, w = frames[0].shape[:2]
-        fourcc = cv2.VideoWriter_fourcc(*"XVID")
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         writer = cv2.VideoWriter(output_path, fourcc, fps, (w, h))
         if not writer.isOpened():
             logger.warning("VideoWriter 打开失败: %s", output_path)

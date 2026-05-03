@@ -3,10 +3,10 @@
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton,
     QSlider, QGroupBox, QLineEdit, QComboBox, QTableWidget,
-    QHeaderView, QGridLayout, QSpinBox,
+    QHeaderView, QGridLayout, QSpinBox, QDialog, QCalendarWidget,
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QDate
+from PyQt6.QtGui import QFont, QTextCharFormat, QColor
 
 
 def build_status_bar(window, cameras, title: str):
@@ -121,6 +121,29 @@ def build_alarm_tab(window):
     layout.setContentsMargins(6, 6, 6, 6)
     layout.setSpacing(6)
 
+    # 日期选择行
+    date_row = QHBoxLayout()
+    window.btn_pick_date = QPushButton("今日")
+    window.btn_pick_date.setFixedHeight(30)
+    window.btn_pick_date.setStyleSheet(
+        "font-weight: bold; padding: 2px 12px; border: 1px solid #4b5563; border-radius: 4px;"
+    )
+    window.btn_pick_date.clicked.connect(window.open_date_picker)
+    window.btn_back_today = QPushButton("返回今日")
+    window.btn_back_today.setFixedHeight(30)
+    window.btn_back_today.setStyleSheet(
+        "padding: 2px 10px; border: 1px solid #4b5563; border-radius: 4px;"
+    )
+    window.btn_back_today.clicked.connect(window.switch_to_today)
+    window.btn_back_today.setVisible(False)
+    window.lbl_date_hint = QLabel("")
+    window.lbl_date_hint.setStyleSheet("color: #9ca3af; font-size: 11px;")
+    date_row.addWidget(QLabel("日期:"))
+    date_row.addWidget(window.btn_pick_date)
+    date_row.addWidget(window.btn_back_today)
+    date_row.addWidget(window.lbl_date_hint, stretch=1)
+    layout.addLayout(date_row)
+
     filter_row = QHBoxLayout()
     window.alarm_search = QLineEdit()
     window.alarm_search.setPlaceholderText("搜索摄像头/时间")
@@ -145,7 +168,8 @@ def build_alarm_tab(window):
     window.alarm_table.setColumnCount(4)
     window.alarm_table.setHorizontalHeaderLabels(["时间", "摄像头", "等级", "状态"])
     window.alarm_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-    window.alarm_table.cellDoubleClicked.connect(window.open_alarm_detail)
+    window.alarm_table.cellClicked.connect(window.open_alarm_detail)
+    window.alarm_table.setToolTip("点击任意告警行查看详情和回放录像")
     layout.addWidget(window.alarm_table, stretch=1)
 
     gb_stats = QGroupBox("告警统计")

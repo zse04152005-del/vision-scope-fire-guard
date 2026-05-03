@@ -47,6 +47,7 @@ class CameraWorker(QThread):
         self.paused = False
         self.low_light_enhance = low_light_enhance
         self._is_local = self._check_local_source(source)
+        self._is_video_file = self._check_video_file(source)
 
         # 告警录像 ring buffer
         buffer_size = max(30, int(clip_pre_seconds / max(0.05, interval_s)) + 5)
@@ -66,6 +67,18 @@ class CameraWorker(QThread):
             if lower.startswith(("rtsp://", "http://", "https://")):
                 return False
             return True
+        return False
+
+    @staticmethod
+    def _check_video_file(source) -> bool:
+        """判断源是否为本地视频文件（区别于 USB 摄像头和网络流）。"""
+        if isinstance(source, str):
+            import os
+            lower = source.lower()
+            if lower.startswith(("rtsp://", "http://", "https://")):
+                return False
+            ext = os.path.splitext(lower)[1]
+            return ext in (".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm")
         return False
 
     @property
@@ -91,18 +104,37 @@ class CameraWorker(QThread):
             self.running = False
             return
 
+        # 视频文件帧率控制：按原始帧率节奏读取，避免瞬间读完
+        video_frame_interval = 0.0
+        if self._is_video_file:
+            video_fps = cap.get(cv2.CAP_PROP_FPS)
+            if video_fps and video_fps > 0:
+                video_frame_interval = 1.0 / video_fps
+
         last_infer = 0.0
         last_frame_ts = time.time()
+        last_read_ts = time.time()
         fail_count = 0
         while self.running:
             if self.paused:
                 time.sleep(0.1)
                 last_frame_ts = time.time()
+                last_read_ts = time.time()
                 continue
+
+            # 视频文件：按原始帧率节奏读帧，模拟实时播放
+            if self._is_video_file and video_frame_interval > 0:
+                elapsed = time.time() - last_read_ts
+                sleep_time = video_frame_interval - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+
             ret, frame = cap.read()
-            now_ts = time.time()
+            last_read_ts = time.time()
+            now_ts = last_read_ts
             heartbeat_stale = (
                 self.heartbeat_timeout > 0
+                and not self._is_video_file
                 and now_ts - last_frame_ts > self.heartbeat_timeout
             )
             if (not ret or frame is None or frame.size == 0) or heartbeat_stale:

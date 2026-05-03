@@ -271,10 +271,11 @@ class CampusMapWidget(QWidget):
                         self.camera_clicked.emit(cam_id)
                         return
 
-    def save_layout(self, path: str) -> None:
-        """保存摄像头地图布局。"""
+    def save_layout(self, path: str, bg_path: str = "") -> None:
+        """保存摄像头地图布局（含底图路径）。"""
         try:
             data = {
+                "bg_path": bg_path,
                 "positions": {
                     k: list(v) for k, v in self._cam_positions.items()
                 },
@@ -284,10 +285,10 @@ class CampusMapWidget(QWidget):
         except Exception as exc:
             logger.error("保存地图布局失败: %s", exc)
 
-    def load_layout(self, path: str) -> None:
-        """加载摄像头地图布局。"""
+    def load_layout(self, path: str) -> str:
+        """加载摄像头地图布局，返回保存的底图路径（可能为空）。"""
         if not os.path.exists(path):
-            return
+            return ""
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -296,8 +297,13 @@ class CampusMapWidget(QWidget):
                 if isinstance(coords, (list, tuple)) and len(coords) == 2:
                     self._cam_positions[cam_id] = (float(coords[0]), float(coords[1]))
             self.update()
+            bg_path = data.get("bg_path", "")
+            if bg_path and os.path.exists(bg_path):
+                self.load_background(bg_path)
+            return bg_path
         except Exception as exc:
             logger.error("加载地图布局失败: %s", exc)
+            return ""
 
 
 class CampusMapDialog(QDialog):
@@ -333,11 +339,14 @@ class CampusMapDialog(QDialog):
         self.map_widget.set_cameras(cameras)
         layout.addWidget(self.map_widget, stretch=1)
 
-        # 加载已有底图和布局
-        if map_bg_path and os.path.exists(map_bg_path):
-            self.map_widget.load_background(map_bg_path)
+        # 加载已有布局（含底图路径）
         if layout_path:
-            self.map_widget.load_layout(layout_path)
+            loaded_bg = self.map_widget.load_layout(layout_path)
+            if loaded_bg:
+                self._map_bg_path = loaded_bg
+        # 如果布局中没有底图，尝试用传入的默认路径
+        if not self.map_widget._bg_pixmap and map_bg_path and os.path.exists(map_bg_path):
+            self.map_widget.load_background(map_bg_path)
 
     def _load_map_image(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -353,6 +362,6 @@ class CampusMapDialog(QDialog):
 
     def _save_layout(self):
         if self._layout_path:
-            self.map_widget.save_layout(self._layout_path)
+            self.map_widget.save_layout(self._layout_path, self._map_bg_path)
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(self, "保存成功", "地图布局已保存")
+            QMessageBox.information(self, "保存成功", "地图布局已保存（含底图路径）")

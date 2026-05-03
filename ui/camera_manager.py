@@ -21,8 +21,36 @@ logger = logging.getLogger(__name__)
 # 自动检测本地摄像头
 # ------------------------------------------------------------------
 
+def _get_camera_names_macos() -> list[str]:
+    """尝试通过 system_profiler 获取 macOS 摄像头设备名称列表。"""
+    import platform
+    if platform.system() != "Darwin":
+        return []
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["system_profiler", "SPCameraDataType"],
+            timeout=5, text=True, stderr=subprocess.DEVNULL,
+        )
+        names = []
+        for line in out.splitlines():
+            stripped = line.strip()
+            # 设备名称行：非键值对、非空、不以 "Camera:" 开头的独立行
+            if stripped and ":" in stripped and not stripped.startswith("Camera"):
+                key, _, val = stripped.partition(":")
+                if key.strip() == "Model ID" or key.strip().endswith("相机") or key.strip().endswith("Camera"):
+                    pass
+            # 设备名称是独立行（缩进 4 空格，以冒号结尾）
+            if line.startswith("    ") and not line.startswith("      ") and stripped.endswith(":"):
+                names.append(stripped.rstrip(":"))
+        return names
+    except Exception:
+        return []
+
+
 def detect_local_cameras(max_index: int = 8) -> list[dict]:
-    """探测可用的本地摄像头索引（0~max_index）。"""
+    """探测可用的本地摄像头索引（0~max_index），macOS 下尝试获取设备名称。"""
+    device_names = _get_camera_names_macos()
     found = []
     for idx in range(max_index):
         cap = cv2.VideoCapture(idx)
@@ -31,10 +59,12 @@ def detect_local_cameras(max_index: int = 8) -> list[dict]:
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             cap.release()
+            name = device_names[len(found)] if len(found) < len(device_names) else ""
             found.append({
                 "index": idx,
                 "resolution": f"{w}x{h}",
                 "readable": ret and frame is not None,
+                "device_name": name,
             })
         else:
             cap.release()
@@ -142,8 +172,8 @@ class CameraManager(QDialog):
         detect_row.addWidget(self.lbl_detect_status, stretch=1)
         local_layout.addLayout(detect_row)
 
-        self.local_cam_list = QHBoxLayout()
-        self._local_buttons: list[QPushButton] = []
+        self.local_cam_list = QVBoxLayout()
+        self._local_buttons: list[QWidget] = []
         local_layout.addLayout(self.local_cam_list)
         local_layout.addStretch()
         add_tabs.addTab(tab_local, "本地摄像头")
@@ -345,16 +375,38 @@ class CameraManager(QDialog):
         if not found:
             self.lbl_detect_status.setText("未检测到本地摄像头")
             return
-        self.lbl_detect_status.setText(f"检测到 {len(found)} 个摄像头，点击按钮一键添加:")
+        self.lbl_detect_status.setText(f"检测到 {len(found)} 个摄像头:")
         for cam_info in found:
             idx = cam_info["index"]
             res = cam_info["resolution"]
-            btn = QPushButton(f"摄像头 {idx}  ({res})")
-            btn.clicked.connect(lambda checked, i=idx, r=res: self._add_local_camera(i, r))
-            self.local_cam_list.addWidget(btn)
-            self._local_buttons.append(btn)
+            dev_name = cam_info.get("device_name", "")
+            display = f"{dev_name} ({res})" if dev_name else f"摄像头 {idx} ({res})"
 
-    def _add_local_camera(self, index: int, resolution: str):
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 2, 0, 2)
+
+            lbl = QLabel(f"  {display}")
+            lbl.setStyleSheet("font-size: 12px;")
+            row_layout.addWidget(lbl, stretch=1)
+
+            btn_prev = QPushButton("预览")
+            btn_prev.setFixedWidth(60)
+            btn_prev.clicked.connect(lambda checked, i=idx: self.preview.start(i))
+            row_layout.addWidget(btn_prev)
+
+            btn_add = QPushButton("添加")
+            btn_add.setFixedWidth(60)
+            btn_add.setStyleSheet("background-color: #2563eb; color: white;")
+            btn_add.clicked.connect(
+                lambda checked, i=idx, r=res, d=dev_name: self._add_local_camera(i, r, d)
+            )
+            row_layout.addWidget(btn_add)
+
+            self.local_cam_list.addWidget(row_widget)
+            self._local_buttons.append(row_widget)
+
+    def _add_local_camera(self, index: int, resolution: str, device_name: str = ""):
         # 检查是否已存在
         for row in range(self.table.rowCount()):
             src = self.table.item(row, 2)
@@ -363,9 +415,10 @@ class CameraManager(QDialog):
                 return
         row = self.table.rowCount()
         cam_id = f"cam{row + 1:02d}"
+        name = device_name if device_name else f"本地摄像头-{index}"
         self._insert_camera({
             "id": cam_id,
-            "name": f"本地摄像头-{index} ({resolution})",
+            "name": f"{name} ({resolution})",
             "source": index,
         })
         self._update_count()

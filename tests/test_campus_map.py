@@ -79,19 +79,26 @@ class TestCampusMapWidget:
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             path = f.name
         try:
-            widget.save_layout(path)
+            widget.save_layout(path, bg_path="/tmp/test_map.png")
+
+            # Verify bg_path is saved in JSON
+            with open(path, "r") as f:
+                data = json.load(f)
+            assert data.get("bg_path") == "/tmp/test_map.png"
 
             # Load into a new widget
             w2 = CampusMapWidget()
             w2.resize(800, 600)
             w2.set_cameras([{"id": "cam01", "name": "A"}, {"id": "cam02", "name": "B"}])
-            w2.load_layout(path)
+            loaded_bg = w2.load_layout(path)
             pos1 = w2._cam_positions["cam01"]
             pos2 = w2._cam_positions["cam02"]
             assert abs(pos1[0] - 0.25) < 0.01
             assert abs(pos1[1] - 0.35) < 0.01
             assert abs(pos2[0] - 0.75) < 0.01
             assert abs(pos2[1] - 0.65) < 0.01
+            # bg_path file doesn't exist, so loaded_bg should still be the path from JSON
+            # (load_layout returns it even if file doesn't exist for display purposes)
         finally:
             os.unlink(path)
 
